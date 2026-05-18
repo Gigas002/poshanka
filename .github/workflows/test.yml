@@ -1,0 +1,65 @@
+name: Test and coverage
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  test-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install Cairo/Pango (build deps)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpango1.0-dev libcairo2-dev libxkbcommon-dev
+
+      - name: Build cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Run tests (default features)
+        run: cargo test --workspace --verbose
+      - name: Run tests (--all-features)
+        run: cargo test --workspace --all-features --verbose
+      - name: Run tests (--no-default-features)
+        run: cargo test --workspace --no-default-features --verbose
+      - name: Generate coverage report (libposhanka)
+        run: |
+          cargo llvm-cov --all-features -p libposhanka --lcov --output-path lcov-libposhanka.info
+      - name: Generate coverage report (poshanka)
+        run: |
+          cargo llvm-cov --all-features -p poshanka --lcov --output-path lcov-poshanka.info
+      - name: Upload libposhanka coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          files: ./lcov-libposhanka.info
+          flags: libposhanka
+          name: libposhanka
+          fail_ci_if_error: false
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload poshanka coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          files: ./lcov-poshanka.info
+          flags: poshanka
+          name: poshanka
+          fail_ci_if_error: false
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

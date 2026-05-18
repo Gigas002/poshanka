@@ -1,0 +1,6 @@
+# Poshanka config — see docs/PLAN.md §3.1
+
+[base]
+font_name = "Noto Sans"
+font_size = 14.0
+theme = "theme.toml"

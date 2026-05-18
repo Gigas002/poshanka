@@ -1,0 +1,5 @@
+# Poshanka theme — see docs/PLAN.md §3.2
+
+[base]
+background_color = "#1e1e2eff"
+foreground_color = "#cdd6f4ff"
