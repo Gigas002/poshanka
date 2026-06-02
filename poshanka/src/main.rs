@@ -12,6 +12,7 @@ use clap::Parser;
 
 use crate::cli::Cli;
 use crate::config::{Config, default_config_path};
+use crate::settings::Settings;
 use crate::theme::Theme;
 
 fn main() -> ExitCode {
@@ -27,11 +28,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let theme_name = config.base.theme.as_deref().unwrap_or("theme.toml");
-    let theme_path = cli
-        .theme
-        .clone()
-        .unwrap_or_else(|| theme::resolve_path(&config_path, theme_name));
+    let theme_path = theme::resolve_path(&config_path, &config.paths.theme);
     let theme = match Theme::load(&theme_path) {
         Ok(t) => t,
         Err(err) => {
@@ -40,7 +37,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let settings = match settings::Settings::resolve(&config, &theme) {
+    let settings = match Settings::resolve(&config, &theme) {
         Ok(s) => s,
         Err(err) => {
             tracing::error!(%err, "failed to resolve settings");
@@ -49,11 +46,13 @@ fn main() -> ExitCode {
     };
 
     tracing::info!(
-        font_name = %settings.font_name,
-        font_size = settings.font_size,
+        font = %settings.card.font_name,
+        font_size = settings.card.font_size,
+        anchor = %settings.daemon.anchor,
+        layer = %settings.daemon.layer,
         theme = %theme_path.display(),
         "poshanka starting"
     );
 
-    app::run(settings)
+    app::run(&settings)
 }

@@ -396,10 +396,10 @@ Workflows must target **`libposhanka`**, **`poshanka`**, and **`poshankactl`** (
 
 ### Phase 1 — Config + theme + runtime spec
 
-- [ ] Serde models matching `examples/config.toml`, `examples/theme.toml`, and fragment overrides (`[override]`, `[paths].overrides`, `[events]`, theme tables).
-- [ ] Load + merge override fragments; resolve `theme` paths relative to config directory.
-- [ ] XDG path resolution + `--config` / `--theme` (`clap`).
-- [ ] `Settings::resolve` → `DaemonSpec` + `CardStyle` plain structs for `libposhanka` (include resolved `[events]` per matched override).
+- [x] Serde models matching `examples/config.toml`, `examples/theme.toml`, and fragment overrides (`[override]`, `[paths].overrides`, `[events]`, theme tables).
+- [x] Load + merge override fragments; resolve `theme` paths relative to config directory.
+- [x] XDG path resolution + `--config` (`clap`; `--theme` removed — theme path is config-only).
+- [x] `Settings::resolve` → `DaemonSpec` + `CardStyle` plain structs for `libposhanka` (include resolved `[events]` per matched override).
 
 **Verify**: unit tests deserialize all `examples/**` configs/themes; merge smoke tests; no Wayland required.
 

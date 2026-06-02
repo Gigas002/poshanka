@@ -8,10 +8,6 @@ pub struct Cli {
     /// Path to config.toml (default: XDG …/poshanka/config.toml)
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
-
-    /// Path to theme.toml (default: resolved from config `base.theme`)
-    #[arg(long, value_name = "PATH")]
-    pub theme: Option<PathBuf>,
 }
 
 #[cfg(test)]

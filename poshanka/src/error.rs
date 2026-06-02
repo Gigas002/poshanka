@@ -17,9 +17,6 @@ pub enum Error {
     #[error("invalid theme: {0}")]
     Theme(String),
 
-    #[error("invalid color in theme: {0}")]
+    #[error("invalid color: {0}")]
     InvalidHexRgba(#[from] libposhanka::ParseHexRgbaError),
-
-    #[error("missing required field `{0}` in config [base]")]
-    MissingBaseField(&'static str),
 }
