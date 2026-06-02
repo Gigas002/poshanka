@@ -27,25 +27,24 @@ jobs:
       - name: Build cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary
-        run: cargo build -p poshanka --release
+      - name: Build release binaries
+        run: |
+          cargo build -p poshanka --release
+          cargo build -p poshankactl --release
 
-      - name: Strip binary
-        run: strip target/release/poshanka
-
-      - name: Package archive
+      - name: Strip and package
         run: |
           VERSION="${GITHUB_REF_NAME:-dev}"
-          ARCHIVE="poshanka-${VERSION}-x86_64-linux.tar.gz"
-          tar -czf "$ARCHIVE" -C target/release poshanka
-          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          strip target/release/poshanka
+          strip target/release/poshankactl
+          tar -czf "poshanka-${VERSION}-x86_64-linux.tar.gz" -C target/release poshanka
+          tar -czf "poshankactl-${VERSION}-x86_64-linux.tar.gz" -C target/release poshankactl
 
-      # Only runs on real tag pushes; skipped for workflow_dispatch.
       - name: Create GitHub Release
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3
         with:
-          files: ${{ env.ARCHIVE }}
+          files: "*.tar.gz"
           generate_release_notes: true
 
   # ── Publish libposhanka to crates.io ───────────────────────────────

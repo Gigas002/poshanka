@@ -43,6 +43,9 @@ jobs:
       - name: Generate coverage report (poshanka)
         run: |
           cargo llvm-cov --all-features -p poshanka --lcov --output-path lcov-poshanka.info
+      - name: Generate coverage report (poshankactl)
+        run: |
+          cargo llvm-cov --all-features -p poshankactl --lcov --output-path lcov-poshankactl.info
       - name: Upload libposhanka coverage to Codecov
         uses: codecov/codecov-action@v6
         with:
@@ -59,6 +62,16 @@ jobs:
           files: ./lcov-poshanka.info
           flags: poshanka
           name: poshanka
+          fail_ci_if_error: false
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload poshankactl coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          files: ./lcov-poshankactl.info
+          flags: poshankactl
+          name: poshankactl
           fail_ci_if_error: false
           verbose: true
         env:
