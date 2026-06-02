@@ -1,11 +1,18 @@
-#![allow(dead_code)] // Phase 1 step 2: used by step 4 (Settings::resolve → DaemonSpec + CardStyle)
+#![allow(dead_code)] // Override helpers used in Phase 4+
 
 use std::path::{Path, PathBuf};
 
-use libposhanka::{OverlaySpec, parse_hex_rgba_to_bgra};
+use libposhanka::{
+    CardEvents, CardStyle, DaemonSpec, IconPos, OverlaySpec, ProgressMode, TextAlign,
+    parse_hex_rgba_to_bgra,
+};
 
-use crate::config::{Config, Events, FragmentConfig, OverrideType, UrgencyLevel};
-use crate::theme::{FragmentTheme, Theme};
+use crate::config::{
+    Config, Events, FragmentConfig, LayerShell, OverrideType, SortBy, SortOrder, UrgencyLevel,
+};
+use crate::theme::{
+    FragmentTheme, IconPosition, ProgressMode as TProgressMode, TextAlignment, Theme,
+};
 
 // ── Override loading ──────────────────────────────────────────────────────────
 
@@ -55,7 +62,6 @@ fn load_single_override(fragment_path: &Path) -> Result<LoadedOverride, crate::e
         })
         .transpose()?;
 
-    // Nested overrides are relative to the fragment's own directory.
     let nested = config
         .paths
         .as_ref()
@@ -88,9 +94,6 @@ pub struct OverrideLayers<'a> {
 }
 
 /// Resolve all applicable override layers for the given notification context.
-///
-/// Unlike a "first wins" scan, this finds urgency and app overrides **independently**
-/// and returns them all so [`apply_layers`] can stack them in specificity order.
 pub fn resolve_layers<'a>(
     overrides: &'a [LoadedOverride],
     app_name: Option<&str>,
@@ -130,8 +133,7 @@ pub fn resolve_layers<'a>(
 
 /// Apply all override layers to `base`, returning the merged theme.
 ///
-/// Application order (each layer patches the previous):
-/// base → base_urgency → app → app_urgency
+/// Application order: base → base_urgency → app → app_urgency
 pub fn apply_layers(base: &Theme, layers: &OverrideLayers<'_>) -> Theme {
     let t = layers
         .base_urgency
@@ -167,25 +169,119 @@ pub fn resolve_events<'a>(
         .or(base)
 }
 
-// ── Settings (Phase 0 overlay placeholder) ────────────────────────────────────
-
-/// Phase 0 placeholder size; driven by layout/theme in Phase 1 step 4.
-const OVERLAY_WIDTH: u32 = 320;
-const OVERLAY_HEIGHT: u32 = 120;
+// ── Settings ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct Settings {
-    pub overlay: OverlaySpec,
+    pub daemon: DaemonSpec,
+    pub card: CardStyle,
 }
 
 impl Settings {
     pub fn resolve(config: &Config, theme: &Theme) -> Result<Self, crate::error::Error> {
-        let _ = config;
-        let background = parse_hex_rgba_to_bgra(&theme.colors.background)?;
-        Ok(Self {
-            overlay: OverlaySpec::new(OVERLAY_WIDTH, OVERLAY_HEIGHT, background),
-        })
+        let daemon = build_daemon_spec(config);
+        let card = build_card_style(theme, config.events.as_ref())?;
+        Ok(Self { daemon, card })
     }
+}
+
+fn build_daemon_spec(config: &Config) -> DaemonSpec {
+    DaemonSpec {
+        stack_max: config.stack.max,
+        anchor: config.placement.anchor.clone(),
+        gap: config.placement.gap,
+        margin: config.placement.margin,
+        queue_history: config.queue.history,
+        queue_max: config.queue.max,
+        queue_sort: match config.queue.sort {
+            SortBy::Time => "time",
+            SortBy::Priority => "priority",
+        }
+        .into(),
+        queue_order: match config.queue.order {
+            SortOrder::Asc => "asc",
+            SortOrder::Desc => "desc",
+        }
+        .into(),
+        timeout_ignore: config.timeouts.ignore,
+        timeout_default_ms: config.timeouts.default,
+        timeout_low_ms: config.timeouts.low,
+        timeout_normal_ms: config.timeouts.normal,
+        timeout_critical_ms: config.timeouts.critical,
+        layer: match config.layer.layer {
+            LayerShell::Background => "background",
+            LayerShell::Bottom => "bottom",
+            LayerShell::Top => "top",
+            LayerShell::Overlay => "overlay",
+        }
+        .into(),
+        output: config.layer.output.clone(),
+    }
+}
+
+fn build_card_style(
+    theme: &Theme,
+    events: Option<&Events>,
+) -> Result<CardStyle, crate::error::Error> {
+    Ok(CardStyle {
+        background_bgra: parse_hex_rgba_to_bgra(&theme.colors.background)?,
+        foreground_bgra: parse_hex_rgba_to_bgra(&theme.colors.foreground)?,
+        border_bgra: parse_hex_rgba_to_bgra(&theme.colors.border)?,
+        progress_bgra: parse_hex_rgba_to_bgra(&theme.colors.progress)?,
+        font_name: theme.font.name.clone(),
+        font_size: theme.font.size,
+        width: theme.layout.width,
+        height: theme.layout.height,
+        padding: theme.layout.padding,
+        margin: theme.layout.margin,
+        border_size: theme.border.size,
+        border_radius: theme.border.radius,
+        text_alignment: match theme.text.alignment {
+            TextAlignment::Left => TextAlign::Left,
+            TextAlignment::Center => TextAlign::Center,
+            TextAlignment::Right => TextAlign::Right,
+        },
+        summary_template: theme.text.summary.clone(),
+        body_template: theme.text.body.clone(),
+        app_template: theme.text.app.clone(),
+        id_template: theme.text.id.clone(),
+        icon_size: theme.icons.size,
+        icon_position: match theme.icons.position {
+            IconPosition::Left => IconPos::Left,
+            IconPosition::Right => IconPos::Right,
+            IconPosition::Top => IconPos::Top,
+            IconPosition::Bottom => IconPos::Bottom,
+        },
+        icon_theme: theme.icons.theme.clone(),
+        progress_mode: match theme.progress.mode {
+            TProgressMode::Over => ProgressMode::Over,
+            TProgressMode::Source => ProgressMode::Source,
+        },
+        events: events
+            .map(|e| CardEvents {
+                on_button_left: e.on_button_left.clone(),
+                on_button_middle: e.on_button_middle.clone(),
+                on_button_right: e.on_button_right.clone(),
+                on_notify: e.on_notify.clone(),
+                on_touch: e.on_touch.clone(),
+            })
+            .unwrap_or_default(),
+    })
+}
+
+/// Build a `CardStyle` from a merged (post-override) theme and resolved events.
+///
+/// Used at notification time in Phase 4 after `apply_layers` + `resolve_events`.
+pub fn card_style_from_theme(
+    theme: &Theme,
+    events: Option<&Events>,
+) -> Result<CardStyle, crate::error::Error> {
+    build_card_style(theme, events)
+}
+
+/// Derive a Phase 0 overlay spec from a `CardStyle` (backward compat until Phase 3).
+pub fn overlay_spec_from_card(card: &CardStyle) -> OverlaySpec {
+    OverlaySpec::new(card.width, card.height, card.background_bgra)
 }
 
 #[cfg(test)]

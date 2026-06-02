@@ -1,6 +1,10 @@
 use std::path::Path;
 
-use super::{Settings, apply_layers, load_overrides, resolve_events, resolve_layers};
+use libposhanka::{ProgressMode, TextAlign};
+
+use super::{
+    Settings, apply_layers, card_style_from_theme, load_overrides, resolve_events, resolve_layers,
+};
 use crate::config::{Config, OverrideType, UrgencyLevel};
 use crate::theme::Theme;
 
@@ -16,14 +20,61 @@ fn load_examples() -> (Config, std::path::PathBuf, Theme) {
     (config, config_path, theme)
 }
 
-// ── Settings::resolve (Phase 0) ───────────────────────────────────────────────
+// ── Settings::resolve — DaemonSpec ───────────────────────────────────────────
 
 #[test]
-fn resolve_builds_overlay_from_examples() {
+fn resolve_daemon_spec_from_examples() {
     let (config, _, theme) = load_examples();
     let settings = Settings::resolve(&config, &theme).unwrap();
-    // background #285577ff → BGRA: [0x77, 0x55, 0x28, 0xff]
-    assert_eq!(settings.overlay.background_bgra, [0x77, 0x55, 0x28, 0xff]);
+    let d = &settings.daemon;
+    assert_eq!(d.stack_max, 5);
+    assert_eq!(d.anchor, "bottom-right");
+    assert_eq!(d.gap, 10);
+    assert_eq!(d.margin, 0);
+    assert!(d.queue_history);
+    assert_eq!(d.queue_sort, "time");
+    assert_eq!(d.queue_order, "desc");
+    assert!(!d.timeout_ignore);
+    assert_eq!(d.timeout_low_ms, 5000);
+    assert_eq!(d.timeout_normal_ms, 10000);
+    assert_eq!(d.timeout_critical_ms, 0);
+    assert_eq!(d.layer, "overlay");
+    assert_eq!(d.output, "");
+}
+
+// ── Settings::resolve — CardStyle ─────────────────────────────────────────────
+
+#[test]
+fn resolve_card_style_colors_from_examples() {
+    let (config, _, theme) = load_examples();
+    let settings = Settings::resolve(&config, &theme).unwrap();
+    let c = &settings.card;
+    // #285577ff → BGRA [0x77, 0x55, 0x28, 0xff]
+    assert_eq!(c.background_bgra, [0x77, 0x55, 0x28, 0xff]);
+    // #ffffffff → BGRA [0xff, 0xff, 0xff, 0xff]
+    assert_eq!(c.foreground_bgra, [0xff, 0xff, 0xff, 0xff]);
+    // #4c7899ff → BGRA [0x99, 0x78, 0x4c, 0xff]
+    assert_eq!(c.border_bgra, [0x99, 0x78, 0x4c, 0xff]);
+}
+
+#[test]
+fn resolve_card_style_layout_from_examples() {
+    let (config, _, theme) = load_examples();
+    let c = Settings::resolve(&config, &theme).unwrap().card;
+    assert_eq!(c.font_name, "Noto Sans");
+    assert!((c.font_size - 14.0).abs() < f64::EPSILON);
+    assert_eq!(c.width, 300);
+    assert_eq!(c.height, 100);
+    assert_eq!(c.padding, 5);
+    assert_eq!(c.margin, 10);
+    assert_eq!(c.border_size, 2);
+    assert_eq!(c.border_radius, 0);
+    assert_eq!(c.text_alignment, TextAlign::Left);
+    assert_eq!(c.summary_template, "<b>{summary}</b>");
+    assert_eq!(c.body_template, "{body}");
+    assert!(c.app_template.is_none());
+    assert_eq!(c.icon_size, 64);
+    assert_eq!(c.progress_mode, ProgressMode::Over);
 }
 
 #[test]
@@ -65,6 +116,21 @@ mode = "over"
 "##;
     let theme: Theme = toml::from_str(raw_theme).unwrap();
     assert!(Settings::resolve(&config, &theme).is_err());
+}
+
+// ── card_style_from_theme (post-override) ─────────────────────────────────────
+
+#[test]
+fn card_style_from_merged_urgency_theme() {
+    let (config, config_path, base) = load_examples();
+    let overrides = load_overrides(&config, &config_path).unwrap();
+
+    let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Critical));
+    let merged_theme = apply_layers(&base, &layers);
+    let card = card_style_from_theme(&merged_theme, None).unwrap();
+    // urgency/critical overrides background and border colors
+    assert_eq!(card.background_bgra[2], 0xbf); // R byte of #bf616aff
+    assert_eq!(card.background_bgra[1], 0x61); // G byte
 }
 
 // ── load_overrides ────────────────────────────────────────────────────────────

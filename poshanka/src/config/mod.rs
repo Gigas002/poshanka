@@ -156,10 +156,22 @@ impl FragmentConfig {
 }
 
 pub fn config_dir() -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
+    config_dir_from_env(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+/// Pure resolution logic; accepts env values directly so tests don't touch the process env.
+pub(crate) fn config_dir_from_env(
+    xdg_config_home: Option<impl AsRef<std::ffi::OsStr>>,
+    home: Option<impl AsRef<std::ffi::OsStr>>,
+) -> PathBuf {
+    xdg_config_home
+        .map(|s| std::ffi::OsString::from(s.as_ref()))
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .or_else(|| home.map(|h| PathBuf::from(h.as_ref()).join(".config")))
         .unwrap_or_else(|| PathBuf::from(".config"))
         .join("poshanka")
 }

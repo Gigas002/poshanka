@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::{
     Config, Events, FragmentConfig, OverrideType, SortBy, SortOrder, UrgencyLevel, config_dir,
-    default_config_path,
+    config_dir_from_env, default_config_path,
 };
 
 // ── main config ──────────────────────────────────────────────────────────────
@@ -173,7 +173,7 @@ fn deserializes_app_urgency_nested_fragments() {
     }
 }
 
-// ── path helpers ──────────────────────────────────────────────────────────────
+// ── path helpers (XDG resolution) ────────────────────────────────────────────
 
 #[test]
 fn config_dir_ends_with_poshanka() {
@@ -183,6 +183,30 @@ fn config_dir_ends_with_poshanka() {
 #[test]
 fn default_config_path_ends_with_config_toml() {
     assert!(default_config_path().ends_with("poshanka/config.toml"));
+}
+
+#[test]
+fn xdg_config_home_used_when_set() {
+    let dir = config_dir_from_env(Some("/xdg/config"), Some("/home/user"));
+    assert_eq!(dir, std::path::Path::new("/xdg/config/poshanka"));
+}
+
+#[test]
+fn empty_xdg_config_home_falls_back_to_home() {
+    let dir = config_dir_from_env(Some(""), Some("/home/user"));
+    assert_eq!(dir, std::path::Path::new("/home/user/.config/poshanka"));
+}
+
+#[test]
+fn no_xdg_config_home_uses_home_dot_config() {
+    let dir = config_dir_from_env(None::<&str>, Some("/home/user"));
+    assert_eq!(dir, std::path::Path::new("/home/user/.config/poshanka"));
+}
+
+#[test]
+fn no_xdg_no_home_falls_back_to_dot_config() {
+    let dir = config_dir_from_env(None::<&str>, None::<&str>);
+    assert_eq!(dir, std::path::Path::new(".config/poshanka"));
 }
 
 // ── round-trip of Events ──────────────────────────────────────────────────────
