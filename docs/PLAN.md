@@ -383,11 +383,11 @@ Workflows must target **`libposhanka`**, **`poshanka`**, and **`poshankactl`** (
   - [x] Delete the `abar/` tree (vendored copy of the sibling bar project).
   - [x] Delete `docs/ABAR_PLAN.md` (lives in the [abar](https://github.com/Gigas002/abar) repo, not here).
   - [x] Fix root `Cargo.toml`: workspace `package` metadata for **poshanka** (homepage, repository, description, keywords — no abar URLs).
-  - [ ] Root `Cargo.toml` **`members`**: `["libposhanka", "poshanka", "poshankactl"]` (three crates; see §2).
+  - [x] Root `Cargo.toml` **`members`**: `["libposhanka", "poshanka", "poshankactl"]` (three crates; see §2).
   - [x] Update `.github/workflows/*` so every `cargo -p`, archive name, Codecov flag, and deploy/publish step references **`poshanka`** / **`libposhanka`** only.
   - [x] Grep tracked files: `rg -i 'abar|libabar' --glob '!docs/PLAN.md'` returns **no matches** (this plan may link to the external sibling repo only).
 - [x] Scaffold `libposhanka` + `poshanka` with tracing in daemon binary.
-- [ ] Scaffold **`poshankactl/`** crate (stub `main`, workspace member).
+- [x] Scaffold **`poshankactl/`** crate (stub `main`, workspace member).
 - [x] `libposhanka`: connect Wayland, bind layer shell, show **one** solid-color overlay rect (theme background) — no text.
 - [x] `poshanka`: load minimal `config.toml` / `theme.toml` (font + colors only); exit with structured error on missing files if strict.
 - [x] Populate **`deny.toml`** license allow list for Wayland stack crates (cairo/pango added in Phase 2).
