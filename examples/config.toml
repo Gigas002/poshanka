@@ -1,6 +1,49 @@
-# Poshanka config — see docs/PLAN.md §3.1
+# Poshanka daemon configuration — global defaults and daemon-wide limits.
 
-[base]
-font_name = "Noto Sans"
-font_size = 14.0
+[paths]
 theme = "theme.toml"
+overrides = [
+    "urgency/low/config.toml",
+    "urgency/critical/config.toml",
+    "apps/some_app/config.toml",
+]
+
+[stack]
+# max number of showing notifications
+max = 5
+
+[placement]
+anchor = "bottom-right"
+gap = 10
+# margin outside the whole stack on that corner (px)
+margin = 0
+
+[queue]
+history = true
+max = 5
+# time, priority
+sort = "time"
+# asc, desc
+order = "desc"
+
+[timeouts]
+# ignore timeout settings from client
+ignore = false
+default = 0
+low = 5000
+normal = 10000
+critical = 0
+
+[layer]
+# background, bottom, top, overlay
+layer = "overlay"
+output = ""
+
+# Overridable section
+
+[events]
+# on_button_left = "wmctrl -a Firefox"
+# on_button_middle =
+# on_button_right =
+# on_notify =
+# on_touch =

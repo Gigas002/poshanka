@@ -1,0 +1,9 @@
+[override]
+# app, urgency
+type = "urgency"
+# required for urgency
+level = "critical"
+
+[paths]
+theme = "theme.toml"
+# ignores overrides if provided
