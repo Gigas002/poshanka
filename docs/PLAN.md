@@ -396,8 +396,8 @@ Workflows must target **`libposhanka`**, **`poshanka`**, and **`poshankactl`** (
 
 ### Phase 1 — Config + theme + runtime spec
 
-- [ ] Serde models matching `examples/config.toml`, `examples/theme.toml`, and fragment overrides (`[override]`, `[paths].overrides`, `[events]`, theme tables).
-- [ ] Load + merge override fragments; resolve `theme` paths relative to config directory.
+- [x] Serde models matching `examples/config.toml`, `examples/theme.toml`, and fragment overrides (`[override]`, `[paths].overrides`, `[events]`, theme tables).
+- [x] Load + merge override fragments; resolve `theme` paths relative to config directory.
 - [ ] XDG path resolution + `--config` / `--theme` (`clap`).
 - [ ] `Settings::resolve` → `DaemonSpec` + `CardStyle` plain structs for `libposhanka` (include resolved `[events]` per matched override).
 

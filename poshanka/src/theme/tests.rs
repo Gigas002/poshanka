@@ -94,6 +94,72 @@ fn deserializes_app_nested_urgency_fragment_themes() {
     }
 }
 
+// ── apply_fragment ────────────────────────────────────────────────────────────
+
+#[test]
+fn apply_fragment_replaces_color_keys_present_in_fragment() {
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../examples/theme.toml"
+    ));
+    let base = Theme::load(path).unwrap();
+
+    let frag = FragmentTheme {
+        colors: Some(super::FragmentColors {
+            background: Some("#2e3440ff".into()),
+            border: Some("#4c566aff".into()),
+            foreground: None,
+            progress: None,
+        }),
+        ..Default::default()
+    };
+
+    let merged = base.apply_fragment(&frag);
+    assert_eq!(merged.colors.background, "#2e3440ff");
+    assert_eq!(merged.colors.border, "#4c566aff");
+    // keys absent in frag keep base values
+    assert_eq!(merged.colors.foreground, "#ffffffff");
+    assert_eq!(merged.colors.progress, "#5588aaff");
+    // non-color sections unchanged
+    assert_eq!(merged.font.name, "Noto Sans");
+}
+
+#[test]
+fn apply_fragment_with_no_overrides_is_identity() {
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../examples/theme.toml"
+    ));
+    let base = Theme::load(path).unwrap();
+    let merged = base.apply_fragment(&FragmentTheme::default());
+    assert_eq!(merged.colors.background, base.colors.background);
+    assert_eq!(merged.font.name, base.font.name);
+    assert_eq!(merged.layout.width, base.layout.width);
+}
+
+#[test]
+fn apply_fragment_replaces_whole_section_when_present() {
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../examples/theme.toml"
+    ));
+    let base = Theme::load(path).unwrap();
+
+    let frag = FragmentTheme {
+        font: Some(super::Font {
+            name: "Monospace".into(),
+            size: 12.0,
+        }),
+        ..Default::default()
+    };
+
+    let merged = base.apply_fragment(&frag);
+    assert_eq!(merged.font.name, "Monospace");
+    assert!((merged.font.size - 12.0).abs() < f64::EPSILON);
+    // other sections unchanged
+    assert_eq!(merged.colors.background, base.colors.background);
+}
+
 // ── path resolution ───────────────────────────────────────────────────────────
 
 #[test]

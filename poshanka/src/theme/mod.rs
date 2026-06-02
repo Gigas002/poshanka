@@ -124,6 +124,47 @@ impl Theme {
     }
 }
 
+impl Theme {
+    /// Apply `frag` on top of `self`, returning a new merged [`Theme`].
+    ///
+    /// Colors are patched key-by-key (only the keys present in `frag.colors` replace
+    /// the corresponding base keys).  All other sections are replaced whole if present.
+    pub fn apply_fragment(&self, frag: &FragmentTheme) -> Theme {
+        Theme {
+            font: frag.font.clone().unwrap_or_else(|| self.font.clone()),
+            colors: match &frag.colors {
+                None => self.colors.clone(),
+                Some(fc) => Colors {
+                    background: fc
+                        .background
+                        .clone()
+                        .unwrap_or_else(|| self.colors.background.clone()),
+                    foreground: fc
+                        .foreground
+                        .clone()
+                        .unwrap_or_else(|| self.colors.foreground.clone()),
+                    border: fc
+                        .border
+                        .clone()
+                        .unwrap_or_else(|| self.colors.border.clone()),
+                    progress: fc
+                        .progress
+                        .clone()
+                        .unwrap_or_else(|| self.colors.progress.clone()),
+                },
+            },
+            layout: frag.layout.clone().unwrap_or_else(|| self.layout.clone()),
+            border: frag.border.clone().unwrap_or_else(|| self.border.clone()),
+            text: frag.text.clone().unwrap_or_else(|| self.text.clone()),
+            icons: frag.icons.clone().unwrap_or_else(|| self.icons.clone()),
+            progress: frag
+                .progress
+                .clone()
+                .unwrap_or_else(|| self.progress.clone()),
+        }
+    }
+}
+
 impl FragmentTheme {
     pub fn load(path: &Path) -> Result<Self, crate::error::Error> {
         let raw = std::fs::read_to_string(path).map_err(|source| crate::error::Error::Io {
