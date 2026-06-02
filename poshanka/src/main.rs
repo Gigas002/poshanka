@@ -27,11 +27,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let theme_name = config.base.theme.as_deref().unwrap_or("theme.toml");
-    let theme_path = cli
-        .theme
-        .clone()
-        .unwrap_or_else(|| theme::resolve_path(&config_path, theme_name));
+    let theme_path = theme::resolve_path(&config_path, &config.paths.theme);
     let theme = match Theme::load(&theme_path) {
         Ok(t) => t,
         Err(err) => {
@@ -49,8 +45,8 @@ fn main() -> ExitCode {
     };
 
     tracing::info!(
-        font_name = %settings.font_name,
-        font_size = settings.font_size,
+        font = %theme.font.name,
+        font_size = theme.font.size,
         theme = %theme_path.display(),
         "poshanka starting"
     );
