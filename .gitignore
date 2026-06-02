@@ -1,0 +1,17 @@
+# Cargo build output
+/target/
+
+# rustfmt backups
+**/*.rs.bk
+
+# MSVC (Windows)
+*.pdb
+
+# Editor / OS
+.claude/
+.zed/
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
