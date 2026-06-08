@@ -47,7 +47,7 @@ jobs:
         run: |
           cargo llvm-cov --all-features -p poshankactl --lcov --output-path lcov-poshankactl.info
       - name: Upload libposhanka coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: ./lcov-libposhanka.info
           flags: libposhanka
@@ -57,7 +57,7 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload poshanka coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: ./lcov-poshanka.info
           flags: poshanka
@@ -67,7 +67,7 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload poshankactl coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: ./lcov-poshankactl.info
           flags: poshankactl
