@@ -35,15 +35,14 @@ pub fn paint_computed(
     let height = computed.height.max(1);
     let stride = width
         .checked_mul(4)
-        .ok_or_else(|| PoshankaError::Render("stride overflow".into()))?
-        as i32;
+        .ok_or_else(|| PoshankaError::Render("stride overflow".into()))? as i32;
 
     let surface = ImageSurface::create(Format::ARgb32, width as i32, height as i32)
         .map_err(|e| PoshankaError::Render(format!("cairo surface: {e}")))?;
 
     {
-        let cr =
-            Context::new(&surface).map_err(|e| PoshankaError::Render(format!("cairo context: {e}")))?;
+        let cr = Context::new(&surface)
+            .map_err(|e| PoshankaError::Render(format!("cairo context: {e}")))?;
 
         cr.set_operator(Operator::Clear);
         cr.paint()
@@ -65,14 +64,7 @@ pub fn paint_computed(
             set_source_bgra(&cr, style.border_bgra);
             cr.set_line_width(border);
             let stroke_radius = (radius - inset).max(0.0);
-            rounded_rect(
-                &cr,
-                inset,
-                inset,
-                w - border,
-                h - border,
-                stroke_radius,
-            );
+            rounded_rect(&cr, inset, inset, w - border, h - border, stroke_radius);
             cr.stroke()
                 .map_err(|e| PoshankaError::Render(format!("border stroke: {e}")))?;
         }

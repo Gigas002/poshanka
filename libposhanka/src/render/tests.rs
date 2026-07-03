@@ -1,6 +1,4 @@
-use crate::model::{
-    CardStyle, IconPos, NotificationView, ProgressMode, TextAlign, Urgency,
-};
+use crate::model::{CardStyle, IconPos, NotificationView, ProgressMode, TextAlign, Urgency};
 use crate::render::{FontContext, measure_card, paint_card};
 
 fn pixel_bgra(data: &[u8], stride: i32, x: u32, y: u32) -> [u8; 4] {

@@ -122,9 +122,7 @@ pub fn measure_card(
 
     let text_stack_h = used_h;
     let content_h = match style.icon_position {
-        IconPos::Top | IconPos::Bottom if reserve_icon => {
-            icon_size + ICON_GAP + text_stack_h
-        }
+        IconPos::Top | IconPos::Bottom if reserve_icon => icon_size + ICON_GAP + text_stack_h,
         _ if reserve_icon => text_stack_h.max(icon_size),
         _ => text_stack_h,
     };
@@ -161,7 +159,13 @@ fn text_region(
                 y: origin_y + (inner_h - icon_size) / 2.0,
                 size: icon_size,
             };
-            (origin_x + icon_size + ICON_GAP, origin_y, text_w, inner_h, Some(icon))
+            (
+                origin_x + icon_size + ICON_GAP,
+                origin_y,
+                text_w,
+                inner_h,
+                Some(icon),
+            )
         }
         IconPos::Right => {
             let text_w = (inner_w - icon_size - ICON_GAP).max(1.0);

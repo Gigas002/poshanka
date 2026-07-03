@@ -20,7 +20,12 @@ impl FontContext {
         Ok(Self { layout })
     }
 
-    pub fn measure_markup(&self, markup: &str, width_px: f64, max_height_px: Option<f64>) -> (f64, f64) {
+    pub fn measure_markup(
+        &self,
+        markup: &str,
+        width_px: f64,
+        max_height_px: Option<f64>,
+    ) -> (f64, f64) {
         self.layout.set_markup(markup);
         self.layout
             .set_width((width_px * f64::from(pango::SCALE)).round() as i32);
