@@ -16,13 +16,29 @@ This document is the **human roadmap** and **agent playbook** for **poshanka**: 
 
 This repo must **not** vendor or depend on `notred` / `libnotred`, `abar` / `libabar`, or open `notred.sock` directly. Copy **patterns** into `libposhanka`; spawn **`notredctl`** (or a user script that only wraps `notredctl`).
 
+### abar / trayd coexistence (mandatory model)
+
+poshanka and notred must split work **exactly like** abar and trayd: independent repos, zero Cargo coupling, integration only through a **connector CLI** and optional wrapper scripts.
+
+| Concern | abar + trayd | poshanka + notred |
+| ------- | ------------ | ----------------- |
+| Daemon | trayd (SNI state) | notred (FDN + queue) |
+| Connector | trayctl | notredctl |
+| Pixels | abar | poshanka |
+| State into UI | `trayctl subscribe` → `tray.sh` → abar exec | `notredctl subscribe` → `notred-subscribe.sh` → poshanka |
+| Swapping provider | Replace trayd + trayctl; keep abar + script contract | Replace notred + notredctl; keep poshanka + NDJSON contract |
+
+**Where behavior differs from abar (on purpose):** abar runs click scripts from **abar config** (`[tray].on_left_click` → `tray-menu.sh`). poshanka **must not** run dismiss/activate/hook scripts from poshanka config. Pointer gestures → **`notredctl input <id> <event_kind>`** (or v0 whole-card `activate` / `close` shortcuts). **`[events].on_button_left` and friends live in notred config** — see [notred PLAN §5.2](https://github.com/Gigas002/notred/blob/master/docs/PLAN.md#52-events-hooks-and-override-fragments).
+
+**poshanka is a dumb view:** paint cards, diff subscribe snapshots, forward `id` + gesture kind. Policy, hooks, FDN signals = **notred only**.
+
 **Reference configs (source of truth for poshanka schemas — update examples first, then this doc):**
 
 - `examples/config.toml` — placement, stack layout, layer shell, notredctl wiring.
 - `examples/theme.toml` — base visual theme; fragments patch tables (e.g. `examples/urgency/*/theme.toml`).
 - `examples/apps/<name>/theme.toml` — optional `[override]` fragments (app or urgency), visual only.
 
-**notred config** (`$XDG_CONFIG_HOME/notred/notred.toml` in the notred repo) owns queue policy, timeouts, and `[events]` — not poshanka.
+**notred config** (`$XDG_CONFIG_HOME/notred/notred.toml`) owns queue policy, timeouts, and `[events]` — not poshanka. **Fragment paths mirror poshanka:** `apps/some_app/config.toml` with nested `urgency/*/config.toml` for per-app behavior overrides (see [notred PLAN §5.2](https://github.com/Gigas002/notred/blob/master/docs/PLAN.md#52-events-hooks-and-override-fragments-poshanka-parity-layout)).
 
 ---
 
@@ -32,14 +48,14 @@ This repo must **not** vendor or depend on `notred` / `libnotred`, `abar` / `lib
 
 - **Wayland-native popups**: `zwlr_layer_shell_v1` overlay surfaces; anchor, margins, keyboard interactivity `none`, fractional scale / buffer scale where supported.
 - **Cairo + Pango**: measure and paint notification **cards** on an **image buffer** (shm) per surface (`cairo-rs`, `pango`, `pangocairo`); gtk-rs stack versions aligned within one minor.
-- **Mako-like UX**: corner stack, gap, urgency-driven look, tap-to-dismiss or whole-card activation — **behavioral** reference, not a mako/dunst config clone. **Action buttons are never drawn** — whole-card tap + `notredctl activate` only.
+- **Mako-like UX**: corner stack, gap, urgency-driven look, tap-to-dismiss or whole-card activation — **behavioral** reference, not a mako/dunst config clone. **Action buttons are never drawn** — gestures reported to notred; hooks run in **notred**, not poshanka.
 - **notredctl subscriber**: live state from `notredctl subscribe` (NDJSON events on stdout); mutations via `notredctl close`, `activate`, etc. Reconnect loop like [abar `tray.sh`](https://github.com/Gigas002/abar/blob/master/examples/scripts/tray/tray.sh).
 - **Config discovery**: XDG-style `$XDG_CONFIG_HOME/poshanka/config.toml`, theme from `paths.theme`, plus `--config` on the binary.
 - **Deploy model**: user runs **`notred`** (systemd user unit or session autostart) **and** **`poshanka`** (graphical subscriber). Control plane for operators: **`notredctl`**, not a poshanka-specific ctl binary.
 
 ### 1.2 Crate split and runtime (poshanka-specific)
 
-- **`libposhanka`** — notification view model (from `notredctl` JSON), render, Wayland surfaces, `notredctl` child-process I/O (subscribe + one-shot commands). **No** `clap`, **no** `toml`, **no** `zbus`, **no** FDN server.
+- **`libposhanka`** — notification view model (from provider feed NDJSON), render, Wayland surfaces, provider child-process I/O (feed script + optional one-shot command). **No** `clap`, **no** `toml`, **no** `zbus`, **no** FDN server. **No provider names in code** — same rule as `libabar` never mentions trayd.
 - **`poshanka`** — binary: config/theme, `Settings`, run loop; wires `libposhanka` only.
 - **No `poshankactl`** — removed from scope; use upstream **`notredctl`**.
 
@@ -51,6 +67,7 @@ This repo must **not** vendor or depend on `notred` / `libnotred`, `abar` / `lib
 
 - **No** FDN D-Bus server, queue, or timeout engine in this repo — [notred](https://github.com/Gigas002/notred).
 - **No** `poshankactl`, custom Unix socket client, or `libnotred` dependency.
+- **No** `[events]` or `on_button_*` in poshanka config — ever (notred owns hooks).
 - **No** GTK/Qt/iced notification applets; **no** full notification center / history browser (use [notred-tui](https://github.com/Gigas002/notred) + `notredctl list-history` when history is enabled).
 - **No** pixel-perfect mako clone; deliberate divergences in §1.5.
 - **No** dunst-only features mako does not have — history UI, inhibition, inline `image-data`, daemon sound, dunst rule scripts.
@@ -59,7 +76,7 @@ This repo must **not** vendor or depend on `notred` / `libnotred`, `abar` / `lib
 ### 1.4 Definitions
 
 - **Notification (view)**: one item from a `notredctl` `update` event / `list` snapshot (`MinimalNotification` shape in [notred IPC](https://github.com/Gigas002/notred/blob/master/docs/IPC.md)).
-- **Card**: rendered representation on a Wayland surface. **No action button row, ever** — whole-card tap → `notredctl activate`.
+- **Card**: rendered representation on a Wayland surface. **No action button row, ever** — whole-card or per-region pointer → `notredctl` (not local shell).
 - **Stack**: ordered visible cards at a screen corner; membership and dismissals come from **notred** via subscribe snapshots.
 - **Surface strategy (v0)**: **one layer-shell surface per notification** for hit-testing; revisit single-surface stack if compositor overhead hurts.
 - **IPC**: poshanka talks to **notred** only through **`notredctl`** subprocesses — never `notred.sock`, never session D-Bus for notifications.
@@ -70,10 +87,10 @@ This repo must **not** vendor or depend on `notred` / `libnotred`, `abar` / `lib
 | ---- | ----------------- | ----- |
 | Platform | Wayland layer-shell popups | FDN lives in **notred**, not poshanka |
 | Config shape | Global theme + **criteria/override fragments** for look | Behavior/timeouts/`[events]` in **notred** config |
-| Interaction | Tap card to dismiss or activate | poshanka → `notredctl`; notred emits FDN signals |
+| Interaction | Tap card to dismiss or activate | poshanka → `notredctl input` / shortcuts; notred runs `[events]` + FDN |
 | Look | Theme tables (colors, layout, Pango templates) | poshanka `examples/theme.toml` |
 | Progress | `over` / `source` bar | deferred; data from notred hints when wired |
-| Actions UI | Mako *can* show buttons; **poshanka never does** | `notredctl activate` |
+| Actions UI | Mako *can* show buttons; **poshanka never does** | `notredctl input` / `activate` — hooks in **notred** |
 | Control CLI | **`notredctl`** (`reload`, `close-all`, `pause`, …) | not a poshanka binary |
 
 ---
@@ -85,29 +102,30 @@ Generic workspace layout: [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-repository-l
 ```text
 libposhanka/
   src/
-    model/           # view types mapped from notredctl JSON
+    model/           # view types mapped from provider feed JSON
+    feed/            # parse NDJSON from feed script stdout (no provider names)
     render/          # cairo+pango: measure card, paint card
     icon/            # icon hint from JSON (Phase 5)
     wayland/         # layer_shell, per-notification surfaces, pointer
-    notred/          # spawn notredctl, parse NDJSON, run ctl commands
 poshanka/
   src/
     cli/             # --config
-    config/          # poshanka TOML only (visual + placement + notred wiring)
+    config/          # poshanka TOML only (visual + placement + [provider] wiring)
     theme/
     settings/
     logger/
     app/             # Settings → libposhanka::run_subscriber
 examples/
   scripts/
-    notred-subscribe.sh   # abar tray.sh analogue — notredctl subscribe + reconnect
+    notred-subscribe.sh   # reference script — names notredctl here only
+  feed-fixtures/          # golden NDJSON lines for feed parser tests
 ```
 
 **Crate boundaries**
 
-- `libposhanka`: render + Wayland + `notredctl` I/O; no config parsers.
-- `poshanka`: TOML, `Settings`, subscriber entrypoint.
-- External runtime deps: **`notred`** daemon + **`notredctl`** on `$PATH` (document in README; optional `examples/notred.service` pointer to notred repo).
+- `libposhanka`: render + Wayland + feed NDJSON parsing; **zero** provider/daemon names in source.
+- `poshanka`: TOML, `Settings`, subscriber entrypoint; `[provider].exec` / `.command` point at user scripts/CLIs.
+- External runtime: whatever your `[provider]` script wraps (e.g. [notred](https://github.com/Gigas002/notred) + `notredctl` in `examples/`).
 
 **Feature passthrough:** optional `icons`, `markup`, etc. on `libposhanka`; `poshanka` binary passes features through. **No `dbus` feature** — D-Bus is notred's concern.
 
@@ -121,11 +139,11 @@ examples/
 | ------- | ----- | ------ |
 | FDN, queue, `max_visible`, timeouts, pause | **notred** | `$XDG_CONFIG_HOME/notred/notred.toml` |
 | `[events]` shell, `ActionInvoked` ordering | **notred** | same |
-| Override fragments (behavior) | **notred** | `paths.overrides` in notred config |
+| Override fragments (behavior) | **notred** | `paths.overrides` — **same directory tree as poshanka** (`apps/<name>/config.toml`, nested `urgency/*/config.toml`); `[events]` instead of theme |
 | Placement, gap, layer-shell anchor/layer | **poshanka** | `examples/config.toml` |
 | Card look (font, colors, layout, templates) | **poshanka** | `examples/theme.toml` + fragments |
 | Visual override per app/urgency | **poshanka** | `examples/apps/*/theme.toml`, `examples/urgency/*/theme.toml` |
-| `notredctl` path / subscribe wrapper | **poshanka** | `[notred]` section |
+| Provider feed script / one-shot CLI path | **poshanka** | `[provider]` section |
 
 **Rule:** if it affects **D-Bus apps** (timeout, dismiss reason, capabilities, signals), it belongs in **notred**. If it affects **pixels only**, it belongs in **poshanka**.
 
@@ -134,7 +152,7 @@ examples/
 | Section | Role |
 | ------- | ---- |
 | `[paths]` | `theme`; `overrides` — ordered theme fragment paths (relative to config dir) |
-| `[notred]` | `ctl` (default `notredctl`); optional `subscribe_exec` wrapper script; optional `socket` passed as `notredctl --socket …` |
+| `[provider]` | `exec` — long-running feed script (abar `[tray].exec` analogue); optional `command` for one-shot RPC CLI; optional `socket` forwarded by script/binary |
 | `[stack]` | `gap`, visual stacking policy for surfaces poshanka paints (not queue cap — that is notred) |
 | `[placement]` | `anchor`, `margin` |
 | `[layer]` | layer-shell `layer`, optional `output` |
@@ -235,16 +253,36 @@ poshanka either:
 
 **Initial sync:** on startup, run `notredctl list` once before or after subscribe attaches, so cards appear even if no event fired yet.
 
-### 5.3 User actions (poshanka → notredctl)
+### 5.3 User actions (poshanka → notredctl only)
+
+poshanka receives pointer events on its Wayland surfaces; **notred never sees raw Wayland events**. poshanka sends **notification `id` + event kind** (or semantic shortcuts below) — **never** shell commands, hook argv, app-specific policy, or `[events]` text.
+
+**Two layers (both end in notred):**
+
+| Layer | When | poshanka sends | notred does |
+| ----- | ---- | -------------- | ----------- |
+| **A — Gesture report** (target) | Per-button / touch / any pointer binding | `notredctl input <id> <event_kind>` | Match `[events].on_button_*` / `on_touch`; default policy if unset |
+| **B — v0 whole-card shortcut** | Single hit target per card (Phase 5 early) | `notredctl activate <id>` or `close <id>` | Same as notred-tui: semantic RPC + `on_action` where applicable |
+
+Layer **B** is a **poshanka convenience** for cards without per-button regions — not a second config system. Layer **A** is required for mako/dunst-style `on_button_left` parity and **must** be used once [notred Phase 6](https://github.com/Gigas002/notred/blob/master/docs/PLAN.md#phase-6--subscriber-input-events--events-hooks) lands.
 
 | User gesture | Command | Notes |
 | ------------ | ------- | ----- |
-| Tap card, `has_actions` | `notredctl activate <id> [key]` | prefer `default` key; notred runs `[events]` + FDN |
-| Tap card, no actions | `notredctl close <id>` | dismiss |
+| Primary tap whole card, `has_actions` (v0) | `notredctl activate <id> [key]` | Shortcut; prefer `default` key |
+| Primary tap whole card, no actions (v0) | `notredctl close <id>` | Shortcut; dismiss |
+| Left / middle / right / touch on card | `notredctl input <id> <event_kind>` | **Correct long-term path** — blocked on notred §5.6 |
 | (none in poshanka) | `notredctl reload` | operator / keybind via shell |
 | (none in poshanka) | `notredctl pause` / `unpause` | operator |
 
-**Do not** emit D-Bus signals or run `[events]` shell from poshanka — notred owns that pipeline.
+**Event kinds** (wire protocol — align with notred IPC): `button_left`, `button_middle`, `button_right`, `touch`. Map from Wayland `wl_pointer` button events in `libposhanka/src/wayland/`. Do **not** invent aliases like `left_button_click` in poshanka — use the enum notred documents.
+
+**Forbidden in poshanka:**
+
+- Reading `$XDG_CONFIG_HOME/notred/` for hook scripts
+- Spawning user shell on click (abar `on_left_click` pattern)
+- Emitting D-Bus `ActionInvoked` / `NotificationClosed` directly
+
+**Do not** run `[events]` shell from poshanka — notred owns that pipeline.
 
 ### 5.4 Process model
 
@@ -260,8 +298,20 @@ poshanka either:
 
 - `wayland-client`, `wayland-protocols-wlr` (`wlr-layer-shell-unstable-v1`).
 - Layer: **overlay**; anchor from config; keyboard interactivity **none**.
-- Pointer: whole-card click per §5.3.
+- Pointer: map seat events → `notredctl` per §5.3. **v0:** whole-card Layer B (`activate` / `close`). **After notred Phase 6:** Layer A (`input` with `button_left`, etc.) for all pointer bindings.
 - Seat: pointer required for v0.
+
+### 5.6 Upstream dependency — notred Phase 6 (`notredctl input`) ✅
+
+**Landed in [notred](https://github.com/Gigas002/notred) Phase 6.** poshanka Phase 5b can now wire Wayland pointer → `[provider].command input <id> <event_kind>`.
+
+- [x] **`notredctl input <id> <event_kind>`** — CLI + socket IPC; NDJSON + golden fixtures in `examples/ipc-examples/`.
+- [x] **notred daemon handler** — merge override fragments; run `on_button_left`, `on_button_middle`, `on_button_right`, `on_touch`.
+- [x] **Precedence rules** — `input` vs v0 `activate` / `close` shortcuts (document in notred `docs/IPC.md`).
+- [x] **FDN side effects** — correct signals when hooks or default policy dismiss/activate.
+- [x] **Document event kind enum** for UI subscribers.
+
+**poshanka follow-up** (Phase 5b): Wayland pointer → provider `input` command. Phase 5a may ship earlier with Layer B whole-card shortcuts only.
 
 ---
 
@@ -269,10 +319,10 @@ poshanka either:
 
 | Module | Responsibility |
 | ------ | -------------- |
-| `model` | `NotificationView`, `Urgency`, `CardStyle`, map from ctl JSON |
+| `model` | `NotificationView`, `Urgency`, `CardStyle`, map from feed JSON |
+| `feed` | Parse NDJSON lines from feed script stdout (`FeedMessage`, `FeedEvent`) |
 | `render` | `measure_card`, `paint_card` → pixel buffer |
-| `wayland` | Globals, surfaces, SHM, pointer → ctl commands |
-| `notred` | Child `subscribe`, parse NDJSON, `run_ctl(&["close", id])` helpers |
+| `wayland` | Globals, surfaces, SHM, pointer → provider command spawn |
 | `icon` | Resolve `icon` from JSON (Phase 5) |
 
 ---
@@ -281,9 +331,9 @@ poshanka either:
 
 Quality gates: [ARCHITECTURE.md §6–§8](./ARCHITECTURE.md#6-testing-and-coverage).
 
-- Workspace members: **`libposhanka`**, **`poshanka`** only (drop `poshankactl` when migration lands).
+- Workspace members: **`libposhanka`**, **`poshanka`** only.
 - **libcairo2-dev**, **libpango1.0-dev** for render tests.
-- **notred** + **notredctl** required for integration/manual tests — install from [notred](https://github.com/Gigas002/notred) or CI services block; unit tests mock NDJSON fixtures from `examples/notred-fixtures/`.
+- **notred** + **notredctl** required for integration/manual tests with the reference script — install from [notred](https://github.com/Gigas002/notred) or CI services block; unit tests mock NDJSON fixtures from `examples/feed-fixtures/`.
 - Headless: queue diff, JSON parse, render pixels — no compositor, no live notred.
 
 ---
@@ -292,21 +342,21 @@ Quality gates: [ARCHITECTURE.md §6–§8](./ARCHITECTURE.md#6-testing-and-cover
 
 ### Phase 0 — Workspace + hygiene + empty vertical slice ✅
 
-Completed under the **pre-notred** plan (three crates, Wayland color rect, config/theme load). Artifacts to revisit in Phase 1b: **`poshankactl/`** stub, D-Bus-oriented descriptions in manifests.
+Completed under the **pre-notred** plan (three crates, Wayland color rect, config/theme load).
 
 ### Phase 1 — Config + theme + runtime spec ✅
 
-Completed: serde for `examples/**`, override merge, `Settings` → `DaemonSpec` / `CardStyle`. **Follow-up in Phase 1b:** trim config schema to visual-only; add `[notred]` section; move timeout/queue/events docs to notred.
+Completed: serde for `examples/**`, override merge, `Settings` → `CardStyle` (runtime spec renamed to `SubscriberSpec` in Phase 1b).
 
-### Phase 1b — notred pivot (migration)
+### Phase 1b — notred pivot (migration) ✅
 
-- [ ] Remove **`poshankactl/`** from workspace; delete crate tree.
-- [ ] Update root `Cargo.toml` description (“Wayland subscriber for notred”).
-- [ ] Add `examples/scripts/notred-subscribe.sh` (tray.sh pattern).
-- [ ] Add `examples/notred-fixtures/*.jsonl` golden lines for subscribe/list parsing tests.
-- [ ] Strip any D-Bus / `zbus` deps and plan-only modules from `libposhanka`.
-- [ ] Rename `DaemonSpec` → `SubscriberSpec` (or equivalent) — placement/layer/notred wiring only.
-- [ ] Document two-process setup in README sketch: `notred` + `poshanka`.
+- [x] Remove **`poshankactl/`** from workspace; delete crate tree.
+- [x] Update root `Cargo.toml` description (“Wayland subscriber for notred”).
+- [x] Add `examples/scripts/notred-subscribe.sh` (tray.sh pattern).
+- [x] Add `examples/feed-fixtures/*.jsonl` golden lines for subscribe/list parsing tests.
+- [x] `libposhanka/src/feed/` — generic NDJSON parser; **no notred/trayd names in lib code**.
+- [x] Config `[provider]` with `exec` / `command` / `socket` (notred only in `examples/scripts/notred-subscribe.sh`).
+- [x] Document two-process setup in README sketch: `notred` + `poshanka`.
 
 **Verify**: workspace builds with two members; `rg poshankactl` / `zbus` clean; fixture parse tests green.
 
@@ -318,11 +368,11 @@ Completed: serde for `examples/**`, override merge, `Settings` → `DaemonSpec` 
 
 **Verify**: `libposhanka` render tests without compositor or notred.
 
-### Phase 3 — notredctl subscriber loop
+### Phase 3 — provider feed subscriber loop
 
-- [ ] `notred/`: spawn subscribe child, parse NDJSON, reconnect with backoff.
-- [ ] `notredctl list` on startup; map JSON → `model::NotificationView`.
-- [ ] Unit tests with golden fixtures; optional `#[ignore]` test with live notred.
+- [ ] `feed/`: spawn `[provider].exec` child, parse NDJSON, reconnect with backoff.
+- [ ] One-shot `list` via `[provider].command` on startup; map JSON → `model::NotificationView`.
+- [ ] Unit tests with golden fixtures; optional `#[ignore]` test with live provider.
 
 **Verify**: manual — `notred` running, `poshanka` logs parsed item count on `notify-send`.
 
@@ -335,12 +385,25 @@ Completed: serde for `examples/**`, override merge, `Settings` → `DaemonSpec` 
 
 **Verify**: manual on Hyprland — `notify-send` shows themed card via notred + poshanka.
 
-### Phase 5 — Pointer + activate/close
+### Phase 5a — Pointer + whole-card shortcuts (Layer B)
 
-- [ ] Whole-card click → `notredctl close <id>` or `activate <id>`.
+Can ship **before** notred Phase 6 — uses existing `activate` / `close` RPCs only.
+
+- [ ] `wl_pointer` on card surfaces; single hit region per card.
+- [ ] Primary tap → `notredctl close <id>` or `activate <id>` per `has_actions` (async spawn, non-blocking poll loop).
 - [ ] Surfaces removed when id absent from next `update`.
 
-**Verify**: tap dismisses; `notify-send --action` + tap → `dbus-monitor` shows `ActionInvoked` from **notred**.
+**Verify:** tap dismisses; `notify-send --action` + tap → `dbus-monitor` shows `ActionInvoked` from **notred** (not poshanka).
+
+### Phase 5b — Per-gesture `input` (Layer A)
+
+**Blocked on [notred Phase 6](https://github.com/Gigas002/notred/blob/master/docs/PLAN.md#phase-6--subscriber-input-events--events-hooks).**
+
+- [ ] Map `PointerAction` → `notredctl input <id> button_left|button_middle|button_right|touch`.
+- [ ] Optional: distinct hit regions if ever drawing invisible button zones (still no visible action row).
+- [ ] Right/middle click runs `on_button_*` from **notred** config — verify with test hook in notred `examples/config.toml`.
+
+**Verify:** `on_button_right` hook in notred config fires on right-click; poshanka config unchanged.
 
 ### Phase 6 — Icons
 
@@ -371,9 +434,10 @@ Completed: serde for `examples/**`, override merge, `Settings` → `DaemonSpec` 
 - [ ] **`notred`** owns FDN; **`notify-send`** reaches cards when **`poshanka`** is running.
 - [ ] Theme from `examples/theme.toml`; placement and gap per poshanka config.
 - [ ] Subscribe feed via **`notredctl`** only (direct spawn or `subscribe_exec` script).
-- [ ] Card tap → `notredctl activate` or `close`; FDN signals originate from **notred**.
+- [ ] Card tap → `notredctl activate` or `close` (5a) and/or `input` (5b); FDN signals originate from **notred** only.
+- [ ] **No** `[events]` or click hooks in poshanka config.
 - [ ] **No** GTK/iced; Cairo+Pango path live.
-- [ ] **No** `poshankactl`, **no** `zbus`, **no** `notred.sock` in poshanka.
+- [x] **No** `poshankactl`, **no** `zbus`, **no** `notred.sock` in poshanka.
 - [ ] CI green per [ARCHITECTURE.md §8](./ARCHITECTURE.md#8-quality-gates--required-before-every-commit).
 
 ---
@@ -393,24 +457,27 @@ Generic policy: [ARCHITECTURE.md §7](./ARCHITECTURE.md#7-dependencies).
 
 ## 11. Pattern checklist (abar tray → poshanka notred)
 
-| abar concern | poshanka module |
-| ------------ | --------------- |
-| `[tray].exec` long-lived script | `[notred].subscribe_exec` or built-in reconnect loop |
-| `trayctl subscribe` stdout JSON | `notredctl subscribe` NDJSON → `notred/` parser |
-| Tray item click → external action | Card click → `notredctl activate` / `close` |
-| Hex RGBA → buffer | `libposhanka/src/color/` |
-| Font / rounded rects | `libposhanka/src/render/` |
-| SHM lifecycle | `libposhanka/src/wayland/` |
-| Settings boundary | `poshanka/src/settings/` → `SubscriberSpec` + `CardStyle` |
-| Poll + wakeup | `libposhanka/src/wayland/` |
+| abar / trayd concern | poshanka / notred analogue | Owner |
+| -------------------- | -------------------------- | ----- |
+| `[tray].exec` long-lived script | `[notred].subscribe_exec` or built-in reconnect loop | poshanka spawns |
+| `trayctl subscribe` stdout JSON | `notredctl subscribe` NDJSON → `notred/` parser | poshanka parses |
+| `[tray].on_left_click` → shell script | **`[events].on_button_left` in notred config** | **notred** runs hook |
+| Tray click → `trayctl menu` / `activate` | Card gesture → `notredctl input` / `activate` / `close` | poshanka sends; notred executes |
+| `feed_id` appends context to handler | `id` + `event_kind` on `input` RPC | notred resolves context |
+| Hex RGBA → buffer | `libposhanka/src/color/` | poshanka |
+| Font / rounded rects | `libposhanka/src/render/` | poshanka |
+| SHM lifecycle | `libposhanka/src/wayland/` | poshanka |
+| Settings boundary | `poshanka/src/settings/` → `SubscriberSpec` + `CardStyle` | poshanka |
+| Poll + wakeup | `libposhanka/src/wayland/` | poshanka |
+| Queue / timeouts / FDN | (no abar equivalent) | **notred** only |
 
-**Never** add `libnotred`, `libabar`, or a custom socket client as dependencies.
+**Never** add `libnotred`, `libabar`, or a custom socket client as dependencies. **Never** put `on_button_*` or `[events]` in poshanka TOML.
 
 ---
 
 ## 12. Document maintenance
 
-Update this plan when subscriber behavior, config schema, or notredctl command usage changes. Update [ARCHITECTURE.md](./ARCHITECTURE.md) for workspace-wide conventions. For poshanka config: `examples/*.toml` first, then this doc. For FDN/queue/timeouts: [notred](https://github.com/Gigas002/notred) docs only.
+Update this plan when subscriber behavior, config schema, or notredctl command usage changes. **Mark completed phase steps with `[x]` and a ✅ on the phase heading.** Update [ARCHITECTURE.md](./ARCHITECTURE.md) for workspace-wide conventions. For poshanka config: `examples/*.toml` first, then this doc. For FDN/queue/timeouts: [notred](https://github.com/Gigas002/notred) docs only.
 
 ---
 
@@ -422,3 +489,5 @@ Update this plan when subscriber behavior, config schema, or notredctl command u
 | 2026-06-02 | `examples/` config system; mako primary reference |
 | 2026-07-03 | Trim duplication; [ARCHITECTURE.md](./ARCHITECTURE.md) structural source of truth |
 | 2026-07-03 | **notred pivot:** poshanka = Wayland subscriber via **`notredctl`**; drop FDN/`poshankactl`; abar tray exec pattern |
+| 2026-07-03 | **§5.6 upstream TODO:** `notredctl input <id> <event_kind>` — poshanka reports gestures, notred runs `[events]` |
+| 2026-07-03 | **abar/trayd coexistence** § intro; Layer A/B input model; Phase 5a/5b; events **never** in poshanka config |

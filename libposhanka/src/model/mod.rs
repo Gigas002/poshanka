@@ -1,4 +1,4 @@
-/// Phase 0 overlay: solid-color Wayland surface (removed in Phase 3 when real cards arrive).
+/// Phase 0 overlay: solid-color Wayland surface (removed in Phase 4 when real cards arrive).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OverlaySpec {
     pub width: u32,
@@ -17,38 +17,29 @@ impl OverlaySpec {
     }
 }
 
-// ── Runtime spec types (Phase 1 step 4) ──────────────────────────────────────
+// ── Runtime spec types ────────────────────────────────────────────────────────
 
-/// Daemon-wide configuration resolved from `config.toml` at startup.
+/// Subscriber-wide configuration: placement, layer shell, and provider feed wiring.
 #[derive(Debug, Clone)]
-pub struct DaemonSpec {
+pub struct SubscriberSpec {
     // [stack]
-    pub stack_max: u32,
+    pub stack_gap: u32,
     // [placement]
     pub anchor: String,
-    pub gap: u32,
     pub margin: u32,
-    // [queue]
-    pub queue_history: bool,
-    pub queue_max: u32,
-    pub queue_sort: String,
-    pub queue_order: String,
-    // [timeouts]
-    pub timeout_ignore: bool,
-    pub timeout_default_ms: u64,
-    pub timeout_low_ms: u64,
-    pub timeout_normal_ms: u64,
-    pub timeout_critical_ms: u64,
     // [layer]
     pub layer: String,
     pub output: String,
+    // [provider]
+    pub exec: Option<String>,
+    pub command: Option<String>,
+    pub socket: Option<String>,
 }
 
 /// Resolved visual style for a notification card.
 ///
-/// Colors are stored as validated BGRA bytes.  This is the *base* style (from
-/// `theme.toml` + base `config.toml` events).  Per-notification overrides are
-/// applied at notification time via `apply_layers` / `resolve_events`.
+/// Colors are stored as validated BGRA bytes. Per-notification theme overrides
+/// are applied at notification time via `apply_layers`.
 #[derive(Debug, Clone)]
 pub struct CardStyle {
     // colors
@@ -79,18 +70,25 @@ pub struct CardStyle {
     pub icon_theme: String,
     // progress
     pub progress_mode: ProgressMode,
-    // events
-    pub events: CardEvents,
 }
 
-/// Resolved shell hooks for card interaction events.
-#[derive(Debug, Clone, Default)]
-pub struct CardEvents {
-    pub on_button_left: Option<String>,
-    pub on_button_middle: Option<String>,
-    pub on_button_right: Option<String>,
-    pub on_notify: Option<String>,
-    pub on_touch: Option<String>,
+/// One notification from a provider feed `list` / subscribe `update` payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationView {
+    pub id: u32,
+    pub app_id: String,
+    pub summary: String,
+    pub body: String,
+    pub urgency: Urgency,
+    pub timeout_ms: Option<u64>,
+    pub has_actions: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Urgency {
+    Low,
+    Normal,
+    Critical,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -2,9 +2,7 @@ use std::path::Path;
 
 use libposhanka::{ProgressMode, TextAlign};
 
-use super::{
-    Settings, apply_layers, card_style_from_theme, load_overrides, resolve_events, resolve_layers,
-};
+use super::{Settings, apply_layers, card_style_from_theme, load_overrides, resolve_layers};
 use crate::config::{Config, OverrideType, UrgencyLevel};
 use crate::theme::Theme;
 
@@ -20,26 +18,21 @@ fn load_examples() -> (Config, std::path::PathBuf, Theme) {
     (config, config_path, theme)
 }
 
-// ── Settings::resolve — DaemonSpec ───────────────────────────────────────────
+// ── Settings::resolve — SubscriberSpec ─────────────────────────────────────────
 
 #[test]
-fn resolve_daemon_spec_from_examples() {
+fn resolve_subscriber_spec_from_examples() {
     let (config, _, theme) = load_examples();
     let settings = Settings::resolve(&config, &theme).unwrap();
-    let d = &settings.daemon;
-    assert_eq!(d.stack_max, 5);
-    assert_eq!(d.anchor, "bottom-right");
-    assert_eq!(d.gap, 10);
-    assert_eq!(d.margin, 0);
-    assert!(d.queue_history);
-    assert_eq!(d.queue_sort, "time");
-    assert_eq!(d.queue_order, "desc");
-    assert!(!d.timeout_ignore);
-    assert_eq!(d.timeout_low_ms, 5000);
-    assert_eq!(d.timeout_normal_ms, 10000);
-    assert_eq!(d.timeout_critical_ms, 0);
-    assert_eq!(d.layer, "overlay");
-    assert_eq!(d.output, "");
+    let s = &settings.subscriber;
+    assert_eq!(s.stack_gap, 10);
+    assert_eq!(s.anchor, "bottom-right");
+    assert_eq!(s.margin, 0);
+    assert_eq!(s.layer, "overlay");
+    assert_eq!(s.output, "");
+    assert_eq!(s.exec.as_deref(), Some("scripts/notred-subscribe.sh"));
+    assert_eq!(s.command.as_deref(), Some("notredctl"));
+    assert!(s.socket.is_none());
 }
 
 // ── Settings::resolve — CardStyle ─────────────────────────────────────────────
@@ -127,7 +120,7 @@ fn card_style_from_merged_urgency_theme() {
 
     let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Critical));
     let merged_theme = apply_layers(&base, &layers);
-    let card = card_style_from_theme(&merged_theme, None).unwrap();
+    let card = card_style_from_theme(&merged_theme).unwrap();
     // urgency/critical overrides background and border colors
     assert_eq!(card.background_bgra[2], 0xbf); // R byte of #bf616aff
     assert_eq!(card.background_bgra[1], 0x61); // G byte
@@ -317,20 +310,4 @@ fn no_layers_returns_base_unchanged() {
     let merged = apply_layers(&base, &layers);
     assert_eq!(merged.colors.background, base.colors.background);
     assert_eq!(merged.font.name, base.font.name);
-}
-
-// ── resolve_events ────────────────────────────────────────────────────────────
-
-#[test]
-fn resolve_events_falls_back_to_base() {
-    let (config, config_path, _) = load_examples();
-    let overrides = load_overrides(&config, &config_path).unwrap();
-    // urgency/low fragment has no [events]; base config has an empty [events] table
-    let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Low));
-    assert!(layers.base_urgency.unwrap().config.events.is_none());
-    let events = resolve_events(config.events.as_ref(), &layers);
-    // falls back to base; examples/config.toml [events] table exists but all keys absent
-    let ev = events.expect("base [events] table is present");
-    assert!(ev.on_button_left.is_none());
-    assert!(ev.on_button_right.is_none());
 }

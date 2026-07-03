@@ -48,8 +48,10 @@ fn main() -> ExitCode {
     tracing::info!(
         font = %settings.card.font_name,
         font_size = settings.card.font_size,
-        anchor = %settings.daemon.anchor,
-        layer = %settings.daemon.layer,
+        anchor = %settings.subscriber.anchor,
+        layer = %settings.subscriber.layer,
+        provider_exec = ?settings.subscriber.exec,
+        provider_command = ?settings.subscriber.command,
         theme = %theme_path.display(),
         "poshanka starting"
     );

@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use super::{
-    Config, Events, FragmentConfig, OverrideType, SortBy, SortOrder, UrgencyLevel, config_dir,
-    config_dir_from_env, default_config_path,
+    Config, FragmentConfig, OverrideType, UrgencyLevel, config_dir, config_dir_from_env,
+    default_config_path,
 };
 
 // ── main config ──────────────────────────────────────────────────────────────
@@ -16,93 +16,75 @@ fn deserializes_examples_config() {
     let cfg = Config::load(path).expect("examples/config.toml must parse");
     assert_eq!(cfg.paths.theme, "theme.toml");
     assert_eq!(cfg.paths.overrides.len(), 3);
-    assert_eq!(cfg.stack.max, 5);
+    assert_eq!(cfg.provider.command.as_deref(), Some("notredctl"));
+    assert_eq!(
+        cfg.provider.exec.as_deref(),
+        Some("scripts/notred-subscribe.sh")
+    );
+    assert!(cfg.provider.socket.is_none());
+    assert_eq!(cfg.stack.gap, 10);
     assert_eq!(cfg.placement.anchor, "bottom-right");
-    assert_eq!(cfg.placement.gap, 10);
     assert_eq!(cfg.placement.margin, 0);
-    let _ = cfg.queue.history; // confirms field exists
-    assert_eq!(cfg.queue.sort, SortBy::Time);
-    assert_eq!(cfg.queue.order, SortOrder::Desc);
-    assert!(!cfg.timeouts.ignore);
-    assert_eq!(cfg.timeouts.default, 0);
-    assert_eq!(cfg.timeouts.low, 5000);
-    assert_eq!(cfg.timeouts.normal, 10000);
-    assert_eq!(cfg.timeouts.critical, 0);
 }
 
 #[test]
-fn config_events_defaults_to_none() {
+fn provider_command_is_optional() {
     let raw = r#"
 [paths]
 theme = "theme.toml"
 
+[provider]
+exec = "scripts/feed.sh"
+
 [stack]
-max = 3
+gap = 5
 
 [placement]
 anchor = "top-right"
-gap = 5
 margin = 0
-
-[queue]
-history = false
-max = 10
-sort = "time"
-order = "asc"
-
-[timeouts]
-ignore = false
-default = 0
-low = 5000
-normal = 10000
-critical = 0
 
 [layer]
 layer = "overlay"
 output = ""
 "#;
     let cfg: Config = toml::from_str(raw).unwrap();
-    assert!(cfg.events.is_none());
+    assert_eq!(cfg.provider.exec.as_deref(), Some("scripts/feed.sh"));
+    assert!(cfg.provider.command.is_none());
+    assert!(cfg.provider.socket.is_none());
 }
 
 #[test]
-fn config_events_parses_shell_hooks() {
+fn provider_optional_fields_parse() {
     let raw = r#"
 [paths]
 theme = "theme.toml"
 
+[provider]
+exec = "scripts/notred-subscribe.sh"
+command = "/usr/bin/notredctl"
+socket = "/run/user/1000/notred.sock"
+
 [stack]
-max = 3
+gap = 5
 
 [placement]
 anchor = "top-right"
-gap = 5
 margin = 0
-
-[queue]
-history = false
-max = 10
-sort = "time"
-order = "asc"
-
-[timeouts]
-ignore = false
-default = 0
-low = 5000
-normal = 10000
-critical = 0
 
 [layer]
 layer = "overlay"
 output = ""
-
-[events]
-on_button_left = "wmctrl -a Firefox"
 "#;
     let cfg: Config = toml::from_str(raw).unwrap();
-    let events = cfg.events.as_ref().unwrap();
-    assert_eq!(events.on_button_left.as_deref(), Some("wmctrl -a Firefox"));
-    assert!(events.on_button_middle.is_none());
+    assert_eq!(cfg.provider.command.as_deref(), Some("/usr/bin/notredctl"));
+    assert_eq!(
+        cfg.provider.exec.as_deref(),
+        Some("scripts/notred-subscribe.sh")
+    );
+    assert_eq!(
+        cfg.provider.socket.as_deref(),
+        Some("/run/user/1000/notred.sock")
+    );
 }
 
 #[test]
@@ -127,7 +109,6 @@ fn deserializes_urgency_low_fragment() {
         frag.paths.as_ref().and_then(|p| p.theme.as_deref()),
         Some("theme.toml")
     );
-    assert!(frag.events.is_none());
 }
 
 #[test]
@@ -207,16 +188,4 @@ fn no_xdg_config_home_uses_home_dot_config() {
 fn no_xdg_no_home_falls_back_to_dot_config() {
     let dir = config_dir_from_env(None::<&str>, None::<&str>);
     assert_eq!(dir, std::path::Path::new(".config/poshanka"));
-}
-
-// ── round-trip of Events ──────────────────────────────────────────────────────
-
-#[test]
-fn events_all_none_by_default() {
-    let e: Events = toml::from_str("").unwrap();
-    assert!(e.on_button_left.is_none());
-    assert!(e.on_button_middle.is_none());
-    assert!(e.on_button_right.is_none());
-    assert!(e.on_notify.is_none());
-    assert!(e.on_touch.is_none());
 }

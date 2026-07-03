@@ -1,4 +1,5 @@
-# Poshanka daemon configuration — global defaults and daemon-wide limits.
+# Poshanka subscriber configuration — placement, layer shell, and provider wiring.
+# Queue policy, timeouts, and gesture hooks belong in your notification daemon config.
 
 [paths]
 theme = "theme.toml"
@@ -8,42 +9,21 @@ overrides = [
     "apps/some_app/config.toml",
 ]
 
+[provider]
+exec = "scripts/notred-subscribe.sh"
+command = "notredctl"
+# socket = ""
+
 [stack]
-# max number of showing notifications
-max = 5
+# gap between stacked notification surfaces (px)
+gap = 10
 
 [placement]
 anchor = "bottom-right"
-gap = 10
 # margin outside the whole stack on that corner (px)
 margin = 0
-
-[queue]
-history = true
-max = 5
-# time, priority
-sort = "time"
-# asc, desc
-order = "desc"
-
-[timeouts]
-# ignore timeout settings from client
-ignore = false
-default = 0
-low = 5000
-normal = 10000
-critical = 0
 
 [layer]
 # background, bottom, top, overlay
 layer = "overlay"
 output = ""
-
-# Overridable section
-
-[events]
-# on_button_left = "wmctrl -a Firefox"
-# on_button_middle =
-# on_button_right =
-# on_notify =
-# on_touch =

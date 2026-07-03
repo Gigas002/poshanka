@@ -3,13 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use libposhanka::{
-    CardEvents, CardStyle, DaemonSpec, IconPos, OverlaySpec, ProgressMode, TextAlign,
+    CardStyle, IconPos, OverlaySpec, ProgressMode, SubscriberSpec, TextAlign,
     parse_hex_rgba_to_bgra,
 };
 
-use crate::config::{
-    Config, Events, FragmentConfig, LayerShell, OverrideType, SortBy, SortOrder, UrgencyLevel,
-};
+use crate::config::{Config, FragmentConfig, LayerShell, OverrideType, UrgencyLevel};
 use crate::theme::{
     FragmentTheme, IconPosition, ProgressMode as TProgressMode, TextAlignment, Theme,
 };
@@ -154,60 +152,27 @@ pub fn apply_layers(base: &Theme, layers: &OverrideLayers<'_>) -> Theme {
         .unwrap_or(t)
 }
 
-/// Resolve the effective `[events]` for a notification context.
-///
-/// Most-specific wins: app_urgency > app > base_urgency > base config events.
-pub fn resolve_events<'a>(
-    base: Option<&'a Events>,
-    layers: &OverrideLayers<'a>,
-) -> Option<&'a Events> {
-    layers
-        .app_urgency
-        .and_then(|o| o.config.events.as_ref())
-        .or_else(|| layers.app.and_then(|o| o.config.events.as_ref()))
-        .or_else(|| layers.base_urgency.and_then(|o| o.config.events.as_ref()))
-        .or(base)
-}
-
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct Settings {
-    pub daemon: DaemonSpec,
+    pub subscriber: SubscriberSpec,
     pub card: CardStyle,
 }
 
 impl Settings {
     pub fn resolve(config: &Config, theme: &Theme) -> Result<Self, crate::error::Error> {
-        let daemon = build_daemon_spec(config);
-        let card = build_card_style(theme, config.events.as_ref())?;
-        Ok(Self { daemon, card })
+        let subscriber = build_subscriber_spec(config);
+        let card = build_card_style(theme)?;
+        Ok(Self { subscriber, card })
     }
 }
 
-fn build_daemon_spec(config: &Config) -> DaemonSpec {
-    DaemonSpec {
-        stack_max: config.stack.max,
+fn build_subscriber_spec(config: &Config) -> SubscriberSpec {
+    SubscriberSpec {
+        stack_gap: config.stack.gap,
         anchor: config.placement.anchor.clone(),
-        gap: config.placement.gap,
         margin: config.placement.margin,
-        queue_history: config.queue.history,
-        queue_max: config.queue.max,
-        queue_sort: match config.queue.sort {
-            SortBy::Time => "time",
-            SortBy::Priority => "priority",
-        }
-        .into(),
-        queue_order: match config.queue.order {
-            SortOrder::Asc => "asc",
-            SortOrder::Desc => "desc",
-        }
-        .into(),
-        timeout_ignore: config.timeouts.ignore,
-        timeout_default_ms: config.timeouts.default,
-        timeout_low_ms: config.timeouts.low,
-        timeout_normal_ms: config.timeouts.normal,
-        timeout_critical_ms: config.timeouts.critical,
         layer: match config.layer.layer {
             LayerShell::Background => "background",
             LayerShell::Bottom => "bottom",
@@ -216,13 +181,13 @@ fn build_daemon_spec(config: &Config) -> DaemonSpec {
         }
         .into(),
         output: config.layer.output.clone(),
+        exec: config.provider.exec.clone(),
+        command: config.provider.command.clone(),
+        socket: config.provider.socket.clone(),
     }
 }
 
-fn build_card_style(
-    theme: &Theme,
-    events: Option<&Events>,
-) -> Result<CardStyle, crate::error::Error> {
+fn build_card_style(theme: &Theme) -> Result<CardStyle, crate::error::Error> {
     Ok(CardStyle {
         background_bgra: parse_hex_rgba_to_bgra(&theme.colors.background)?,
         foreground_bgra: parse_hex_rgba_to_bgra(&theme.colors.foreground)?,
@@ -257,29 +222,17 @@ fn build_card_style(
             TProgressMode::Over => ProgressMode::Over,
             TProgressMode::Source => ProgressMode::Source,
         },
-        events: events
-            .map(|e| CardEvents {
-                on_button_left: e.on_button_left.clone(),
-                on_button_middle: e.on_button_middle.clone(),
-                on_button_right: e.on_button_right.clone(),
-                on_notify: e.on_notify.clone(),
-                on_touch: e.on_touch.clone(),
-            })
-            .unwrap_or_default(),
     })
 }
 
-/// Build a `CardStyle` from a merged (post-override) theme and resolved events.
+/// Build a `CardStyle` from a merged (post-override) theme.
 ///
-/// Used at notification time in Phase 4 after `apply_layers` + `resolve_events`.
-pub fn card_style_from_theme(
-    theme: &Theme,
-    events: Option<&Events>,
-) -> Result<CardStyle, crate::error::Error> {
-    build_card_style(theme, events)
+/// Used at notification time in Phase 4 after `apply_layers`.
+pub fn card_style_from_theme(theme: &Theme) -> Result<CardStyle, crate::error::Error> {
+    build_card_style(theme)
 }
 
-/// Derive a Phase 0 overlay spec from a `CardStyle` (backward compat until Phase 3).
+/// Derive a Phase 0 overlay spec from a `CardStyle` (backward compat until Phase 4).
 pub fn overlay_spec_from_card(card: &CardStyle) -> OverlaySpec {
     OverlaySpec::new(card.width, card.height, card.background_bgra)
 }

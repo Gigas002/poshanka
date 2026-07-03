@@ -11,10 +11,3 @@ overrides = [
     "urgency/low/config.toml",
     "urgency/critical/config.toml",
 ]
-
-[events]
-# on_button_left = "wmctrl -a Firefox"
-# on_button_middle =
-# on_button_right =
-# on_notify =
-# on_touch =
