@@ -360,13 +360,13 @@ Completed: serde for `examples/**`, override merge, `Settings` → `CardStyle` (
 
 **Verify**: workspace builds with two members; `rg poshankactl` / `zbus` clean; fixture parse tests green.
 
-### Phase 2 — Render core (Cairo + Pango)
+### Phase 2 — Render core (Cairo + Pango) ✅
 
-- [ ] `color`, `render/font`, rounded rect, BGRA buffer (port from [abar](https://github.com/Gigas002/abar) if useful).
-- [ ] `measure_card` / `paint_card` with summary + body (placeholder icon).
-- [ ] Headless render tests.
+- [x] `color`, `render/font`, rounded rect, BGRA buffer (ported from [abar](https://github.com/Gigas002/abar)).
+- [x] `measure_card` / `paint_card` with summary + body (placeholder icon).
+- [x] Headless render tests.
 
-**Verify**: `libposhanka` render tests without compositor or notred.
+**Verify**: `libposhanka` render tests without compositor or provider daemon.
 
 ### Phase 3 — provider feed subscriber loop
 

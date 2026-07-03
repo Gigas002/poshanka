@@ -2,6 +2,7 @@ pub mod color;
 pub mod error;
 pub mod feed;
 pub mod model;
+pub mod render;
 pub mod wayland;
 
 pub use color::{ParseHexRgbaError, parse_hex_rgba, parse_hex_rgba_to_bgra, rgba_to_bgra};
@@ -11,4 +12,5 @@ pub use model::{
     CardStyle, IconPos, NotificationView, OverlaySpec, ProgressMode, SubscriberSpec, TextAlign,
     Urgency,
 };
+pub use render::{ComputedCard, FontContext, Frame, measure_card, paint_card};
 pub use wayland::run_overlay;
