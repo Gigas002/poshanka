@@ -2,9 +2,11 @@
 
 use std::io::Write;
 use std::os::fd::AsFd;
+use std::os::unix::net::UnixStream;
+use std::sync::mpsc;
 
 use rustix::event::{PollFd, PollFlags, poll};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
 };
@@ -15,10 +17,18 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 };
 
 use crate::error::PoshankaError;
+use crate::feed::{FeedSignal, FeedSignalKind, NotificationState};
 use crate::model::OverlaySpec;
 
+/// Optional provider feed wired into the Wayland poll loop.
+pub struct FeedHandle {
+    pub wakeup: UnixStream,
+    pub rx: mpsc::Receiver<FeedSignal>,
+    pub notifications: NotificationState,
+}
+
 /// Blocks until the layer surface is closed or an unrecoverable error occurs.
-pub fn run_overlay(spec: OverlaySpec) -> Result<(), PoshankaError> {
+pub fn run_overlay(spec: OverlaySpec, feed: Option<FeedHandle>) -> Result<(), PoshankaError> {
     let conn = Connection::connect_to_env()?;
     let display = conn.display();
     let mut event_queue = conn.new_event_queue();
@@ -29,6 +39,7 @@ pub fn run_overlay(spec: OverlaySpec) -> Result<(), PoshankaError> {
     let mut state = AppState {
         running: true,
         spec,
+        feed,
         compositor: None,
         shm: None,
         layer_shell: None,
@@ -53,12 +64,17 @@ pub fn run_overlay(spec: OverlaySpec) -> Result<(), PoshankaError> {
             break;
         }
 
+        state.drain_feed();
+
         let Some(read_guard) = event_queue.prepare_read() else {
             continue;
         };
 
         let wayland_fd = read_guard.connection_fd();
-        let mut pollfds = [PollFd::from_borrowed_fd(wayland_fd, PollFlags::IN)];
+        let mut pollfds = vec![PollFd::from_borrowed_fd(wayland_fd, PollFlags::IN)];
+        if let Some(feed) = state.feed.as_mut() {
+            pollfds.push(PollFd::from_borrowed_fd(feed.wakeup.as_fd(), PollFlags::IN));
+        }
 
         loop {
             match poll(&mut pollfds, None) {
@@ -78,6 +94,8 @@ pub fn run_overlay(spec: OverlaySpec) -> Result<(), PoshankaError> {
             .dispatch_pending(&mut state)
             .map_err(|e| PoshankaError::WaylandProtocol(format!("dispatch failed: {e}")))?;
 
+        state.drain_feed();
+
         if !state.running {
             break;
         }
@@ -89,6 +107,7 @@ pub fn run_overlay(spec: OverlaySpec) -> Result<(), PoshankaError> {
 struct AppState {
     running: bool,
     spec: OverlaySpec,
+    feed: Option<FeedHandle>,
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     layer_shell: Option<ZwlrLayerShellV1>,
@@ -101,6 +120,23 @@ struct AppState {
 }
 
 impl AppState {
+    fn drain_feed(&mut self) {
+        let Some(feed) = self.feed.as_mut() else {
+            return;
+        };
+        crate::feed::drain_wakeup(&mut feed.wakeup);
+        while let Ok(signal) = feed.rx.try_recv() {
+            match feed.notifications.apply_signal(signal) {
+                FeedSignalKind::Items => {
+                    info!(count = feed.notifications.len(), "feed update");
+                }
+                FeedSignalKind::Reload => {
+                    info!("feed reload event");
+                }
+            }
+        }
+    }
+
     fn try_init_layer_shell(&mut self, qh: &QueueHandle<Self>) {
         if self.layer_surface.is_some() {
             return;

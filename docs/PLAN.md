@@ -339,7 +339,7 @@ Quality gates: [ARCHITECTURE.md §6–§8](./ARCHITECTURE.md#6-testing-and-cover
 
 ## 8. Phased steps
 
-**Status (2026-07-03):** Phases **0–2** and **1b** done. **notred** Phases 5–6 merged — poshanka **Phase 3** is next (feed loop), then **4** (Wayland cards), then **5** (pointer). No upstream blockers.
+**Status (2026-07-03):** Phases **0–3** and **1b** done. **Phase 4** is next (Wayland card surfaces). No upstream blockers.
 
 ### Phase 0 — Workspace + hygiene + empty vertical slice ✅
 
@@ -369,14 +369,14 @@ Completed: serde for `examples/**`, override merge, `Settings` → `CardStyle` (
 
 **Verify**: `libposhanka` render tests without compositor or provider daemon.
 
-### Phase 3 — Provider feed subscriber loop
+### Phase 3 — Provider feed subscriber loop ✅
 
-- [ ] Spawn `[provider].exec` child; parse NDJSON from stdout; reconnect with backoff (abar exec-handler pattern).
-- [ ] One-shot `[provider].command list` on startup; map JSON → `model::NotificationView`.
-- [ ] `feed/` helpers for one-shot RPC spawn (`close`, `activate`, `input`, …) via `[provider].command` + optional `socket`.
-- [ ] Unit tests with golden fixtures; optional `#[ignore]` integration test with live notred.
+- [x] Spawn `[provider].exec` child; parse NDJSON from stdout; reconnect with backoff (abar exec-handler pattern).
+- [x] One-shot `[provider].command list` on startup; map JSON → `model::NotificationView` (wire NDJSON + CLI JSON array).
+- [x] `feed/` helpers for one-shot RPC spawn (`close`, `activate`, `input`, …) via `[provider].command` + optional `socket`.
+- [x] Unit tests with golden fixtures; `#[ignore]` integration test in `libposhanka/tests/live_provider.rs`.
 
-**Verify**: manual — notred running, poshanka logs parsed item count on `notify-send`.
+**Verify**: manual — notred running, poshanka logs `initial provider list` / `feed update` on `notify-send`.
 
 ### Phase 4 — Wayland surfaces + stack sync
 

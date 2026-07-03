@@ -56,5 +56,5 @@ fn main() -> ExitCode {
         "poshanka starting"
     );
 
-    app::run(&settings)
+    app::run(&settings, &config_path)
 }

@@ -1,6 +1,17 @@
+mod command;
+mod exec;
+mod list;
+mod provider;
+mod state;
+
 use serde::Deserialize;
 
 use crate::model::{NotificationView, Urgency};
+
+pub use command::{CommandError, activate, close, input, run_command};
+pub use exec::{fetch_list, spawn_feed_exec};
+pub use provider::ProviderSpec;
+pub use state::{FeedSignalKind, NotificationState};
 
 /// Parsed NDJSON line from a provider feed script stdout (list response or subscribe event).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +26,13 @@ pub enum FeedEvent {
     Update { items: Vec<NotificationView> },
     Reload,
     HistoryChanged,
+}
+
+/// Signal from the long-running provider feed stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FeedSignal {
+    Items(Vec<NotificationView>),
+    Reload,
 }
 
 /// Parse one NDJSON line from provider feed stdout.
@@ -60,6 +78,8 @@ pub enum ParseFeedError {
     UnknownEventKind(String),
     #[error("unknown urgency `{0}`")]
     UnknownUrgency(String),
+    #[error("provider error: {0}")]
+    Provider(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,7 +99,7 @@ struct RawEvent {
 }
 
 #[derive(Debug, Deserialize)]
-struct RawNotification {
+pub(crate) struct RawNotification {
     id: u32,
     app_id: String,
     summary: String,
@@ -133,6 +153,17 @@ fn parse_urgency(raw: &str) -> Result<Urgency, ParseFeedError> {
         "normal" => Ok(Urgency::Normal),
         "critical" => Ok(Urgency::Critical),
         other => Err(ParseFeedError::UnknownUrgency(other.to_string())),
+    }
+}
+
+pub fn drain_wakeup(stream: &mut std::os::unix::net::UnixStream) {
+    use std::io::Read;
+    let mut buf = [0u8; 64];
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
     }
 }
 
