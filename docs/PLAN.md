@@ -1,20 +1,28 @@
-# poshanka — Rust architecture + implementation plan
+# poshanka — implementation plan
 
-This document is the **human roadmap** and **agent playbook** for **poshanka**: a minimal Wayland-native notification daemon, **behaviorally inspired mainly by [mako](https://github.com/emersion/mako)** (with [dunst](https://dunst-project.org/) as a secondary reference where overlap is small), using **Cairo + Pango** for drawing, **no** heavyweight UI toolkits, and **no** in-daemon settings panels or notification-center history UI — user-visible side effects are **spawn external commands** (shell runner) or **D-Bus protocol responses** only.
+This document is the **human roadmap** and **agent playbook** for **poshanka**: a **Wayland popup renderer** for the [notred](https://github.com/Gigas002/notred) notification platform — **behaviorally inspired mainly by [mako](https://github.com/emersion/mako)** (with [dunst](https://dunst-project.org/) as a secondary reference where overlap is small), using **Cairo + Pango** for drawing, **no** heavyweight UI toolkits, and **no** in-process notification queue or Freedesktop D-Bus server.
 
-It mirrors the **execution discipline** of the sibling [abar](https://github.com/Gigas002/abar) project and WAU-style plans:
+**poshanka does not own `org.freedesktop.Notifications`.** [notred](https://github.com/Gigas002/notred) is the session host (FDN + queue + timeouts + optional history). poshanka is an **external subscriber** that paints corner cards and forwards user input via **`notredctl`** only — the same integration model [notred](https://github.com/Gigas002/notred) uses for [notred-tui](https://github.com/Gigas002/notred) and third-party clients.
 
-- Library-first crate split, small verifiable phases, strict quality gates (fmt, clippy `-D warnings` with feature matrix, tests, `cargo doc`, `typos`, `cargo deny`).
-- **Directory modules** with **sibling `tests.rs`** — tests never live in the same file as logic (same rule as WAU §2.0).
-- **Per-integration Cargo features** so minimal installs and CI do not bitrot optional code paths.
+**Workspace structure, settings flow, testing, features, dependencies, and quality gates** are defined in [ARCHITECTURE.md](./ARCHITECTURE.md). Follow that document for every change; this plan covers **product behavior, crate split, config schema, notredctl integration, and phased delivery** only.
 
-**Architectural reference (external):** [abar](https://github.com/Gigas002/abar) uses the same stack (layer shell, Cairo/Pango, Tokio, zbus). This repo must **not** vendor or depend on `abar` / `libabar`. When implementing poshanka, **copy patterns** into `libposhanka`, not crates.
+**Integration references:**
 
-**Reference configs (source of truth for schemas — update examples first, then this doc):**
+| Project | Role for poshanka |
+| ------- | ----------------- |
+| [notred](https://github.com/Gigas002/notred) | FDN daemon, queue, timeouts, `[events]` shell, `ActionInvoked` / `NotificationClosed` |
+| **`notredctl`** | **Only supported connector** — `subscribe`, `list`, `close`, `activate`, `reload`, … ([IPC.md](https://github.com/Gigas002/notred/blob/master/docs/IPC.md) is for ctl/daemon authors; UI authors use `notredctl --help`) |
+| [abar](https://github.com/Gigas002/abar) | **Exec-handler pattern** for streaming external state — see [tray.sh](https://github.com/Gigas002/abar/blob/master/examples/scripts/tray/tray.sh) (`trayctl subscribe` loop → JSON lines on stdout) |
 
-- `examples/config.toml` — global daemon behavior; `paths.overrides` lists fragment paths.
+This repo must **not** vendor or depend on `notred` / `libnotred`, `abar` / `libabar`, or open `notred.sock` directly. Copy **patterns** into `libposhanka`; spawn **`notredctl`** (or a user script that only wraps `notredctl`).
+
+**Reference configs (source of truth for poshanka schemas — update examples first, then this doc):**
+
+- `examples/config.toml` — placement, stack layout, layer shell, notredctl wiring.
 - `examples/theme.toml` — base visual theme; fragments patch tables (e.g. `examples/urgency/*/theme.toml`).
-- `examples/apps/<name>/config.toml` — optional `[override]` fragments (app or urgency), same schema as root config for overridable sections.
+- `examples/apps/<name>/theme.toml` — optional `[override]` fragments (app or urgency), visual only.
+
+**notred config** (`$XDG_CONFIG_HOME/notred/notred.toml` in the notred repo) owns queue policy, timeouts, and `[events]` — not poshanka.
 
 ---
 
@@ -22,181 +30,121 @@ It mirrors the **execution discipline** of the sibling [abar](https://github.com
 
 ### 1.1 Goals
 
-- **Minimal surface area**: smallest useful notification daemon; optional behavior behind **compile-time** `features` where practical (not for the core D-Bus server — see §5.1).
-- **Wayland-native**: `zwlr_layer_shell_v1` overlay surfaces; correct anchor, margins, keyboard interactivity `none`, fractional scale / buffer scale where supported.
-- **Cairo + Pango**: measure and paint notification **cards** on an **image buffer** (shm) per surface or per combined overlay (`cairo-rs`, `pango`, `pangocairo`); keep gtk-rs stack versions aligned within one minor.
-- **Freedesktop notifications**: session-bus **`org.freedesktop.Notifications`** via **native Rust [`zbus`](https://crates.io/crates/zbus)** — **no** `libdbus` / `dbus-glib`.
-- **Mako-like UX defaults**: corner stack, gap, max visible, urgency-driven look/timeouts, tap-to-dismiss or whole-card activation — **behavioral** reference, not a mako/dunst config clone (poshanka uses its own `examples/` schema). **Action buttons are never drawn** (unlike mako’s optional action UI) — whole-card tap + `ActionInvoked` only.
-- **Config discovery**: XDG-style resolution (e.g. `$XDG_CONFIG_HOME/poshanka/config.toml`, theme under `.../poshanka/themes/`), plus `--config` / `--theme` on the binary.
-- **Control IPC**: same session bus as notifications — a **vendor D-Bus interface** for **`poshankactl`** (makoctl parity: reload, close-all, pause, …), not a second Unix-socket protocol in v0 (see §5).
+- **Wayland-native popups**: `zwlr_layer_shell_v1` overlay surfaces; anchor, margins, keyboard interactivity `none`, fractional scale / buffer scale where supported.
+- **Cairo + Pango**: measure and paint notification **cards** on an **image buffer** (shm) per surface (`cairo-rs`, `pango`, `pangocairo`); gtk-rs stack versions aligned within one minor.
+- **Mako-like UX**: corner stack, gap, urgency-driven look, tap-to-dismiss or whole-card activation — **behavioral** reference, not a mako/dunst config clone. **Action buttons are never drawn** — whole-card tap + `notredctl activate` only.
+- **notredctl subscriber**: live state from `notredctl subscribe` (NDJSON events on stdout); mutations via `notredctl close`, `activate`, etc. Reconnect loop like [abar `tray.sh`](https://github.com/Gigas002/abar/blob/master/examples/scripts/tray/tray.sh).
+- **Config discovery**: XDG-style `$XDG_CONFIG_HOME/poshanka/config.toml`, theme from `paths.theme`, plus `--config` on the binary.
+- **Deploy model**: user runs **`notred`** (systemd user unit or session autostart) **and** **`poshanka`** (graphical subscriber). Control plane for operators: **`notredctl`**, not a poshanka-specific ctl binary.
 
-### 1.2 Discipline (non-negotiable, WAU-style)
+### 1.2 Crate split and runtime (poshanka-specific)
 
-- **Library-first**: **`libposhanka`** — notification model, queue/timeouts, render, Wayland surfaces, D-Bus **server** glue (testable without TOML); **`poshanka`** — daemon crate (config/theme, `Settings`, run loop); **`poshankactl`** — separate **crate** (makoctl parity), thin zbus **client** only.
-- **`poshanka` contains no domain logic** beyond wiring; **`libposhanka` does not depend on clap** or **toml** and does not assume a specific logger implementation beyond `tracing`.
-- **Tokio for async work**: use **`tokio`** for D-Bus I/O, timers (auto-dismiss), and `tokio::process` for user commands. The Wayland client loop stays **synchronous** on the main thread (`poll` + nonblocking dispatch, wakeup `UnixStream`); never block it on subprocess or socket I/O — offload with `tokio::spawn`.
-- **Step sizing**: small PR-sized phases with explicit **Verify** blocks.
-- **Feature matrix in CI**: default, `--all-features`, `--no-default-features` (core must still build — define explicitly in Phase 0: queue + render types without live D-Bus or Wayland if needed).
-- **Naming**: short, descriptive; prefer clarity over abstraction depth.
-- **Code comments**: describe current behavior only (invariants, protocol steps, non-obvious effects). No roadmap phase labels, session/chat context, or long rationale unrelated to reading the code.
+- **`libposhanka`** — notification view model (from `notredctl` JSON), render, Wayland surfaces, `notredctl` child-process I/O (subscribe + one-shot commands). **No** `clap`, **no** `toml`, **no** `zbus`, **no** FDN server.
+- **`poshanka`** — binary: config/theme, `Settings`, run loop; wires `libposhanka` only.
+- **No `poshankactl`** — removed from scope; use upstream **`notredctl`**.
+
+**Threading:** `notredctl subscribe` runs as a **child process** with stdout parsed on a dedicated reader thread (or async task that signals the Wayland thread). One-shot `notredctl close` / `activate` via `std::process::Command` — never block the Wayland `poll` loop. The Wayland client loop stays **synchronous** on the main thread (`poll` + nonblocking dispatch, wakeup `UnixStream`).
+
+**Step sizing:** small PR-sized phases with explicit **Verify** blocks (quality gates per [ARCHITECTURE.md §8](./ARCHITECTURE.md#8-quality-gates--required-before-every-commit)).
 
 ### 1.3 Non-goals / deferred
 
-- **No** GTK/Qt/iced/winit notification applets; **no** full notification center / history browser.
-- **No** pixel-perfect mako clone; target is **similar** stacking, colors, and timeouts from `examples/`, with deliberate divergences (§1.5).
-- **No** X11 or DBus-less “demo mode” in the first milestone binary (stub builds in `libposhanka` for CI only).
-- **No dunst-only (or generic FDN) features mako does not have** — e.g. dunst rule **scripts**, notification **history** UI, **inhibition**, inline **`image-data`** in the body, daemon-owned **sound** playback. If mako does not do it, poshanka does not roadmap it.
-- **Deferred = mako parity gaps only** — work not yet done in the phased plan but already in mako’s behavior, mainly: **icons** (Phase 6), **timeouts/urgency/stack** polish (Phase 7), **`[progress]`** + `value` hint (theme schema exists; render when implemented), optional **body markup** if we advertise `body-markup` like mako. Extra **criteria** keys matching mako sections (`category`, `desktop-entry`, …) may extend `[override]` later; not a separate dunst-style rules engine.
+- **No** FDN D-Bus server, queue, or timeout engine in this repo — [notred](https://github.com/Gigas002/notred).
+- **No** `poshankactl`, custom Unix socket client, or `libnotred` dependency.
+- **No** GTK/Qt/iced notification applets; **no** full notification center / history browser (use [notred-tui](https://github.com/Gigas002/notred) + `notredctl list-history` when history is enabled).
+- **No** pixel-perfect mako clone; deliberate divergences in §1.5.
+- **No** dunst-only features mako does not have — history UI, inhibition, inline `image-data`, daemon sound, dunst rule scripts.
+- **Deferred (mako parity, pixels or subscriber-only):** icons (Phase 5), **`[progress]`** bar (theme schema exists), optional **body markup** if advertised jointly with notred, richer **override criteria** for theme fragments.
 
 ### 1.4 Definitions
 
-- **Notification**: one client message (`Notify`) with id, summary, body, urgency, timeout, optional icon, optional actions.
-- **Card**: rendered representation of one notification (rounded rect, text, optional icon). **No action button row, ever** — client actions use whole-card tap + `ActionInvoked`.
-- **Stack**: ordered list of visible cards at a screen corner; older entries shift or drop per `max_visible` policy.
-- **Surface strategy (v0)**: prefer **one layer-shell surface per notification** for simpler hit-testing and independent timeouts; revisit a single-surface stack if compositor overhead becomes an issue (document in phase notes).
-- **IPC (two planes)**:
-  - **Notification plane** — standard `org.freedesktop.Notifications` (apps, `notify-send`).
-  - **Control plane** — poshanka-specific D-Bus methods for **`poshankactl`** talking to the **already-running** daemon (mako: `makoctl`; dunst: `dunstctl` / `org.dunstproject.cmd0`).
+- **Notification (view)**: one item from a `notredctl` `update` event / `list` snapshot (`MinimalNotification` shape in [notred IPC](https://github.com/Gigas002/notred/blob/master/docs/IPC.md)).
+- **Card**: rendered representation on a Wayland surface. **No action button row, ever** — whole-card tap → `notredctl activate`.
+- **Stack**: ordered visible cards at a screen corner; membership and dismissals come from **notred** via subscribe snapshots.
+- **Surface strategy (v0)**: **one layer-shell surface per notification** for hit-testing; revisit single-surface stack if compositor overhead hurts.
+- **IPC**: poshanka talks to **notred** only through **`notredctl`** subprocesses — never `notred.sock`, never session D-Bus for notifications.
 
 ### 1.5 Behavioral reference (mako primary, dunst secondary)
 
-| Area | Follow **mako** | Notes / **dunst** where different |
-| ---- | ----------------- | --------------------------------- |
-| Platform | Wayland layer-shell popups, minimal chrome | Dunst is often X11-era in docs; both use FDN D-Bus. |
-| Config shape | Global defaults + **criteria/override fragments** (mako `[app-name=…]` sections → our `[override]` + `paths.overrides`) | Dunst uses monolithic `dunstrc` + rules. |
-| Interaction | Tap card to dismiss; optional shell side effects via config | Dunst adds richer mouse enums (`close_current`, `do_action`, …) — we use `[events]` shell + **always** `ActionInvoked` when client sent actions. |
-| Look | Theme tables (colors, layout, border, Pango text templates) | Dunst `format` string — we use per-field `{summary}` templates. |
-| Progress | `over` / `source` bar compositing | Dunst separate progress-bar widget — we align with mako when implemented. |
-| Actions UI | Mako *can* show buttons; **poshanka never does** | Both support FDN `actions` on the bus. |
-| Control CLI | **`poshankactl`** — external ctl for reload, dismiss, pause (`makoctl` parity) | Dunst `dunstctl` / `org.dunstproject.cmd0` — same D-Bus role, different binary name. |
-
-When in doubt during implementation, prefer **mako** behavior and config ergonomics; cite dunst only for FDN/control-plane precedent, not for feature scope.
+| Area | Follow **mako** | Notes |
+| ---- | ----------------- | ----- |
+| Platform | Wayland layer-shell popups | FDN lives in **notred**, not poshanka |
+| Config shape | Global theme + **criteria/override fragments** for look | Behavior/timeouts/`[events]` in **notred** config |
+| Interaction | Tap card to dismiss or activate | poshanka → `notredctl`; notred emits FDN signals |
+| Look | Theme tables (colors, layout, Pango templates) | poshanka `examples/theme.toml` |
+| Progress | `over` / `source` bar | deferred; data from notred hints when wired |
+| Actions UI | Mako *can* show buttons; **poshanka never does** | `notredctl activate` |
+| Control CLI | **`notredctl`** (`reload`, `close-all`, `pause`, …) | not a poshanka binary |
 
 ---
 
-## 2. Repository layout (target)
+## 2. Crate layout (poshanka-specific)
+
+Generic workspace layout: [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-repository-layout).
 
 ```text
-poshanka/                      # workspace root (repo name)
-  Cargo.toml                   # workspace members: libposhanka, poshanka, poshankactl
-  Cargo.lock                   # committed
-  deny.toml
-  examples/
-    config.toml
-    theme.toml
-    urgency/…/config.toml
-    urgency/…/theme.toml
-    apps/<name>/config.toml
-    apps/<name>/theme.toml
-  libposhanka/
-    Cargo.toml                 # features defined here
-    src/
-      lib.rs
-      error.rs                 # thiserror (Wayland / SHM / render / async only)
-      model/                   # Notification, Urgency, Action, StackAnchor, RuntimeSpec
-      queue/                   # ids, enqueue, dismiss, timeout scheduling hooks
-      render/                  # cairo+pango: measure card, paint card
-      icon/                    # app-icon hint: path + freedesktop name (Phase 6)
-      wayland/                 # compositor, layer_shell, per-notification surfaces, pointer
-      dbus/                    # zbus servers (daemon side only)
-        notifications/         # Notify, CloseNotification, signals
-        control/               # org.poshanka.Daemon1 server (reload, close-all, pause, …)
-      spawn/                   # Tokio runtime + sh -c (action / close hooks from config)
-  poshanka/
-    Cargo.toml                 # [[bin]] poshanka; clap, toml, tracing-subscriber
-    src/
-      main.rs                  # daemon entry
-      error.rs                 # config/theme/file validation (thiserror)
-      config/
-        mod.rs
-        tests.rs
-      theme/
-        mod.rs
-        tests.rs
-      settings/
-        mod.rs                 # merged view: cli > env > config
-        tests.rs
-      app/
-        mod.rs                 # load Settings → libposhanka::run_daemon
-  poshankactl/
-    Cargo.toml                 # [[bin]] poshankactl; clap, zbus, tracing-subscriber
-    src/
-      main.rs                  # control client entry (makoctl parity)
-      cli/
-        mod.rs                 # subcommands: ping, reload, close-all, …
-        tests.rs
-      dbus/
-        mod.rs                 # zbus proxy → org.poshanka.Daemon1
-        tests.rs
-  docs/
-    PLAN.md                    # this file
-  .github/workflows/           # CI: all workspace members
+libposhanka/
+  src/
+    model/           # view types mapped from notredctl JSON
+    render/          # cairo+pango: measure card, paint card
+    icon/            # icon hint from JSON (Phase 5)
+    wayland/         # layer_shell, per-notification surfaces, pointer
+    notred/          # spawn notredctl, parse NDJSON, run ctl commands
+poshanka/
+  src/
+    cli/             # --config
+    config/          # poshanka TOML only (visual + placement + notred wiring)
+    theme/
+    settings/
+    logger/
+    app/             # Settings → libposhanka::run_subscriber
+examples/
+  scripts/
+    notred-subscribe.sh   # abar tray.sh analogue — notredctl subscribe + reconnect
 ```
 
-**Crate boundary rules**
+**Crate boundaries**
 
-- `libposhanka` has **no** `clap`, **no** `toml`, **no** config/theme parsers; **no** `println!` (use `tracing`). Hosts D-Bus **servers** only (notifications + control).
-- `poshanka` loads TOML, builds `Settings` / `DaemonSpec`, runs the daemon. **No** control subcommands.
-- `poshankactl` is a **thin client**: `clap` + zbus proxy to `org.poshanka.Daemon1` only. **No** Wayland, **no** config/theme load (except flags that only affect the ctl process, if any). May depend on `libposhanka` only for shared constants/types if useful — not on `poshanka` the crate.
-- After `Settings` is built in `poshanka`, only plain structs cross into `libposhanka::run_daemon` — avoid threading raw `clap` types through the library.
+- `libposhanka`: render + Wayland + `notredctl` I/O; no config parsers.
+- `poshanka`: TOML, `Settings`, subscriber entrypoint.
+- External runtime deps: **`notred`** daemon + **`notredctl`** on `$PATH` (document in README; optional `examples/notred.service` pointer to notred repo).
 
-**Feature passthrough:** `poshanka` features are **thin passthroughs** to `libposhanka`, e.g. `cargo install poshanka --no-default-features --features "dbus,icons"`. `poshankactl` needs **`dbus`** (zbus) only; install via `cargo install --path poshankactl` or package both binaries from the workspace.
+**Feature passthrough:** optional `icons`, `markup`, etc. on `libposhanka`; `poshanka` binary passes features through. **No `dbus` feature** — D-Bus is notred's concern.
 
 ---
 
-## 3. Data model and config
+## 3. Config split: poshanka vs notred
 
-Schemas are defined by **`examples/`** (see `examples/config.toml`, `examples/theme.toml`, and override fragments). Phase 1 implements serde + merge; behavior below is the contract agreed before implementation.
+### 3.1 What lives where
 
-### 3.1 Config file roles
+| Concern | Owner | Config |
+| ------- | ----- | ------ |
+| FDN, queue, `max_visible`, timeouts, pause | **notred** | `$XDG_CONFIG_HOME/notred/notred.toml` |
+| `[events]` shell, `ActionInvoked` ordering | **notred** | same |
+| Override fragments (behavior) | **notred** | `paths.overrides` in notred config |
+| Placement, gap, layer-shell anchor/layer | **poshanka** | `examples/config.toml` |
+| Card look (font, colors, layout, templates) | **poshanka** | `examples/theme.toml` + fragments |
+| Visual override per app/urgency | **poshanka** | `examples/apps/*/theme.toml`, `examples/urgency/*/theme.toml` |
+| `notredctl` path / subscribe wrapper | **poshanka** | `[notred]` section |
 
-| File | Role |
-| ---- | ---- |
-| `examples/config.toml` | Global defaults: paths, stack, placement, queue, timeouts, layer, `[events]`. |
-| `examples/theme.toml` | Base card look: font, colors, layout, border, text templates, icons, progress. |
-| `examples/<fragment>/config.toml` | Patch overridable sections; may include `[override]` metadata. |
-| `examples/<fragment>/theme.toml` | Patch theme tables only (e.g. urgency colors). |
+**Rule:** if it affects **D-Bus apps** (timeout, dismiss reason, capabilities, signals), it belongs in **notred**. If it affects **pixels only**, it belongs in **poshanka**.
 
-**`[paths]`**
+### 3.2 poshanka `config.toml`
 
-- `theme` — base theme file (relative to config directory).
-- `overrides` — ordered list of fragment paths (relative to main config directory). Merge policy in Phase 1: **first matching `[override]` wins** for app/urgency (document tie-breaking in code); fragment fields **replace** the same keys in merged config/theme.
+| Section | Role |
+| ------- | ---- |
+| `[paths]` | `theme`; `overrides` — ordered theme fragment paths (relative to config dir) |
+| `[notred]` | `ctl` (default `notredctl`); optional `subscribe_exec` wrapper script; optional `socket` passed as `notredctl --socket …` |
+| `[stack]` | `gap`, visual stacking policy for surfaces poshanka paints (not queue cap — that is notred) |
+| `[placement]` | `anchor`, `margin` |
+| `[layer]` | layer-shell `layer`, optional `output` |
 
-**`[override]`** (in fragments only)
+**`[override]`** (in theme fragments only)
 
-- `type` — `app` \| `urgency`.
-- `name` — required when `type = "app"` (matches `Notify` `app_name`).
-- `level` — required when `type = "urgency"` (`low` \| `normal` \| `critical`).
+- `type` — `app` \| `urgency`
+- `name` / `level` — match `app_id` / urgency from subscribe JSON
 
-**`[stack]`** — `max` visible notifications (global cap).
-
-**`[placement]`** — `anchor`, `gap`, `margin` (outer margin on the anchored corner).
-
-**`[queue]`** — `history`, `max`, `sort`, `order` (history UI deferred; store policy in Phase 7+).
-
-**`[timeouts]`** — `ignore` (ignore client timeout hints), `default`, `low`, `normal`, `critical` (ms; `0` = persist until dismissed — document in Phase 7).
-
-**`[layer]`** — layer-shell `layer`, optional `output` name.
-
-**Not in user config (implementation only)**
-
-- **`GetServerInformation`** — hardcoded in binary (`name`, `vendor`, `version`, `spec_version`). No `[server]` table.
-- **`GetCapabilities`** — computed from what is implemented (e.g. `body`, `actions` when ActionInvoked is live). No `[capabilities]` table in TOML.
-
-### 3.2 `[events]` — card click and notify hooks
-
-User-side shell hooks on the **notification card**. **Action buttons are not planned** (no UI, no hit regions, not post-v0). Client actions come from the `Notify` `actions` array and whole-card tap only.
-
-**Hard policy (click on card, per button: `on_button_left` / `on_button_middle` / `on_button_right` / `on_touch`):**
-
-1. If the notification has **actions** from the client → **always** emit **`ActionInvoked`** on D-Bus (prefer key `"default"` when present, else document fallback for a single action). This is **never skipped** because of `[events]` shell commands (wayshot and similar clients may block in `wait_for_action`).
-2. If an **`[events]`** key is set for that button → also run `sh -c '<command>'` (**additive**). Order: **shell first**, then **`ActionInvoked`**, then dismiss popup (exact dismiss reason in Phase 5).
-3. If **no actions** on the notification and no shell key → **dismiss** (`NotificationClosed`, user reason).
-4. If **no actions** but shell key is set → run shell only, then dismiss.
-
-**`on_notify`** — optional `sh -c` when a notification is **shown** (not a click). Independent of `ActionInvoked`.
-
-**No custom hint parameters** — do not read per-notification paths or other client hints for `[events]` substitution (wayshot keeps per-shot paths in its own process via `ActionInvoked`).
+Merge policy: **first matching `[override]` wins** for app/urgency; fragment theme keys replace same keys in merged theme.
 
 ### 3.3 `theme.toml`
 
@@ -206,41 +154,39 @@ User-side shell hooks on the **notification card**. **Action buttons are not pla
 | `[colors]` | `background`, `foreground`, `border`, `progress` |
 | `[layout]` | `width`, `height` (max), `padding`, `margin` |
 | `[border]` | `size`, `radius` |
-| `[text]` | `alignment`; `summary`, `body`, optional `app`, `id` — Pango markup templates with `{summary}`, `{body}`, … (escape client text before substitute; `parse_markup` in render). |
-| `[icons]` | `size` (≤0 off), `position`, `theme` |
-| `[progress]` | `mode` — `over` \| `source` (mako-style compositing; data from `value` hint when progress is implemented). |
+| `[text]` | `alignment`; `summary`, `body`, … — Pango templates with `{summary}`, `{body}`, … |
+| `[icons]` | `size`, `position`, `theme` |
+| `[progress]` | `mode` — `over` \| `source` (deferred) |
 
-Urgency color patches live in fragments (e.g. `examples/urgency/critical/theme.toml`), not necessarily in base theme.
+### 3.4 notredctl JSON → internal view
 
-### 3.4 D-Bus → internal model mapping
+Map fields from `notredctl list` / `subscribe` `update` items (see [notred IPC](https://github.com/Gigas002/notred/blob/master/docs/IPC.md)):
 
-| D-Bus `Notify` arg / hint | Internal field | v0 support |
-| ------------------------- | -------------- | ------------ |
-| `app_name`, `replaces_id` | metadata | yes |
-| `app_icon` | icon hint (name or path) | path + name in Phase 6 |
-| `summary`, `body` | text | yes (plain text) |
-| `actions` | `Vec<Action>` (stored for `ActionInvoked`; **never** rendered as buttons) | Phase 5 |
-| `hints` urgency | `Urgency` | yes |
-| `timeout` | override or config default | Phase 7 |
-| `image-data` / inline body images | — | **not planned** (mako uses icon column, not dunst-style inline images) |
-| `category`, `desktop-entry` | match criteria for overrides | extend `[override]` when needed |
-| `body-markup` | body | deferred §1.3 only if mako parity |
-| custom hint substitution for `[events]` | — | **not planned** |
+| JSON field | poshanka use | v0 |
+| ---------- | ------------ | -- |
+| `id` | surface key, `notredctl close` / `activate` | yes |
+| `app_id`, `summary`, `body` | text templates | yes |
+| `urgency` | theme override + colors | yes |
+| `timeout_ms` | display only (timer in notred) | yes |
+| `icon` | icon column | Phase 5 |
+| `has_actions` | whole-card tap → `activate` vs `close` | Phase 4 |
 
-**`GetCapabilities`**: advertise only implemented behavior (e.g. `body`, `actions` once `ActionInvoked` on card tap works; `icon-static` after Phase 6). Do not claim `body-markup` until implemented.
+Do not re-parse raw FDN hints in poshanka — notred normalizes payloads for subscribers.
 
 ---
 
 ## 4. Rendering and UI
 
+(Unchanged from prior plan — pixels only.)
+
 ### 4.1 Cairo + Pango pipeline
 
-- **Measure**: summary + body from `[text]` templates (Pango markup); optional icon column. **No action row.**
-- **Draw**: rounded rect fill + border; clip/wrap body with Pango; ellipsis on single-line summary if needed.
-- **Buffer**: ARGB32 premultiplied or BGRA — pick one (`parse_hex_rgba_to_bgra` style) and document once.
-- **Upload**: `wl_shm` pool per surface resize; full card redraw acceptable for **v0**.
+- **Measure**: summary + body from `[text]` templates; optional icon. **No action row.**
+- **Draw**: rounded rect, border, Pango wrap/ellipsis.
+- **Buffer**: BGRA (document once in code).
+- **Upload**: `wl_shm` per surface; full redraw acceptable for v0.
 
-### 4.2 Layout within a card
+### 4.2 Card layout
 
 ```text
 ┌─────────────────────────────────────┐
@@ -250,301 +196,229 @@ Urgency color patches live in fragments (e.g. `examples/urgency/critical/theme.t
      entire card = one click target (v0)
 ```
 
-- Icon column omitted when no icon resolved.
-- Whole card is the only click target → §3.2 `[events]` + `ActionInvoked` when client sent actions. No per-action button hit regions at any time.
-
 ### 4.3 Stack placement
 
-- Compute screen position from output geometry + `placement.anchor` + cumulative card heights + `gap`.
-- On new notification or dismiss: reposition all surfaces (v0 may destroy/recreate surfaces — keep logic in `queue` + `wayland`).
+- Position from output geometry + `placement.anchor` + cumulative card heights + `[stack].gap`.
+- On subscribe `update`: diff ids → create/destroy/reposition surfaces.
 
 ---
 
-## 5. Wayland and IPC policy
+## 5. notredctl integration (abar exec-handler pattern)
 
-**Yes — poshanka needs IPC.** D-Bus on the session bus **is** IPC; the plan treats it as the **only** v0 wire protocol (no private Unix-socket control protocol). Two logical interfaces on the **same** object path (mako/dunst pattern).
+### 5.1 Architecture
 
-### 5.1 D-Bus — notification plane (core)
+```text
+Apps ──FDN──► notred ◄──socket── notredctl ◄──spawn── poshanka
+                    │                              │
+                    │                              └── Wayland cards
+                    └── queue, timeouts, signals
+```
 
-- Well-known **bus name**: **`org.freedesktop.Notifications`** (session bus). Owning this name is the **single-instance** guard: a second `poshanka` process must not become a second daemon (see §5.4).
-- Object path: **`/org/freedesktop/Notifications`**
-- Interface: **`org.freedesktop.Notifications`**
-- Methods (v0): `Notify`, `CloseNotification`, `GetCapabilities`, `GetServerInformation`.
-- Signals (v0): `NotificationClosed`, `ActionInvoked`.
-- **zbus** only; code under `libposhanka/src/dbus/notifications/`.
-- **Cargo feature `dbus`** (default **on** for `poshanka` binary): links zbus. For `--no-default-features` CI, `libposhanka` must still compile (queue + render unit tests; dbus module gated with `#[cfg(feature = "dbus")]`).
+### 5.2 Subscribe feed (like abar `[tray].exec`)
 
-**Threading:** D-Bus callbacks run on Tokio; enqueue/dequeue and “request redraw” via `mpsc` + wakeup fd into the Wayland thread. Control-plane calls use the **same** channel types (e.g. `ControlRequest::ReloadConfig`).
+[abar](https://github.com/Gigas002/abar) tray module runs a long-lived script that streams JSON:
 
-### 5.2 D-Bus — control plane (core for CLI)
+```bash
+# examples/scripts/notred-subscribe.sh — reference wrapper
+while true; do
+    notredctl subscribe
+    sleep 3
+done
+```
 
-Daemon-only operations are **not** part of the Freedesktop spec. Expose a **vendor interface** on the same object path (`makoctl` / dunst `org.dunstproject.cmd0` precedent). Poshanka v0:
+poshanka either:
 
-| Item | Value |
-| ---- | ----- |
-| Interface | **`org.poshanka.Daemon1`** (versioned suffix; bump if breaking) |
-| Path | `/org/freedesktop/Notifications` (same object as notifications) |
-| Client | **`poshankactl`** binary (`clap` + **`zbus`** proxy on `org.poshanka.Daemon1`) — no `libdbus`. Daemon binary **`poshanka`** does not implement control subcommands. |
+1. Spawns `subscribe_exec` from config (abar-style), **or**
+2. Spawns `notredctl subscribe` directly with the same reconnect loop in Rust.
 
-**Methods (v0 minimum):**
+**Contract:** one NDJSON object per line on child stdout. Handle `{"type":"event","event":{"kind":"update","items":[…]}}` — refresh local view from `items`. On `reload` event, re-read poshanka config/theme from disk (notred config reload is `notredctl reload`, separate).
 
-| Method | Purpose |
-| ------ | ------- |
-| `Ping` | Health check; fails if daemon not running |
-| `CloseAll` | Dismiss every visible notification (emit `NotificationClosed` per id) |
-| `Close` | `CloseNotification` by id (control path for CLI) |
-| `Reload` | Re-read config/theme from disk, apply without restart |
-| `Pause` / `Unpause` | Stop showing new `Notify` (queue or drop); mako/dunst parity |
+**Initial sync:** on startup, run `notredctl list` once before or after subscribe attaches, so cards appear even if no event fired yet.
 
-**Deferred (post-v0, only if mako parity):** e.g. `makoctl`-style **modes** — not dunst `HistoryList` / `RuleList` / inhibition.
+### 5.3 User actions (poshanka → notredctl)
 
-**Why not a Unix socket?** Avoids a second protocol, second security story, and duplicate wakeups; **zbus-only** on the session bus. Revisit only if a concrete integrator requires it.
+| User gesture | Command | Notes |
+| ------------ | ------- | ----- |
+| Tap card, `has_actions` | `notredctl activate <id> [key]` | prefer `default` key; notred runs `[events]` + FDN |
+| Tap card, no actions | `notredctl close <id>` | dismiss |
+| (none in poshanka) | `notredctl reload` | operator / keybind via shell |
+| (none in poshanka) | `notredctl pause` / `unpause` | operator |
 
-### 5.3 Wayland (core)
+**Do not** emit D-Bus signals or run `[events]` shell from poshanka — notred owns that pipeline.
+
+### 5.4 Process model
+
+| Process | Role |
+| ------- | ---- |
+| **`notred`** | Single FDN owner; must be running before poshanka shows cards |
+| **`poshanka`** | Subscriber UI; exits if subscribe child dies permanently (configurable retry like tray.sh) |
+| **`notredctl`** | Stateless CLI; poshanka spawns per command + one long-lived subscribe child |
+
+**Single instance:** notred enforces FDN bus name. Multiple **poshanka** instances are undefined — document “one graphical subscriber per session” for v0.
+
+### 5.5 Wayland
 
 - `wayland-client`, `wayland-protocols-wlr` (`wlr-layer-shell-unstable-v1`).
 - Layer: **overlay**; anchor from config; keyboard interactivity **none**.
-- Pointer: card click per §3.2 — optional `[events]` shell, then **`ActionInvoked` if actions present**, else dismiss.
-- Seat: pointer required; keyboard not required for v0.
-
-### 5.4 Process model and single instance
-
-- **`poshanka`** (daemon): request bus name `org.freedesktop.Notifications`, run Wayland loop until exit. No control subcommands on this binary (mako / makoctl split).
-- **`poshankactl`** (control client crate, **makoctl parity**): connect to session bus, call `org.poshanka.Daemon1` on the running daemon; exit non-zero if name not owned or method fails. **Third workspace crate** `poshankactl/` (not a second binary inside `poshanka/`).
-- Optional: write **`$XDG_RUNTIME_DIR/poshanka/pid`** for human debugging only — **not** authoritative for locking (bus name is).
-
-**`poshankactl` v0 commands (minimum, mirror makoctl scope where applicable):**
-
-| Command | Maps to | Notes |
-| ------- | ------- | ----- |
-| `poshankactl ping` | `Ping` | Health check |
-| `poshankactl reload` | `Reload` | Re-read config/theme |
-| `poshankactl close-all` | `CloseAll` | Dismiss all |
-| `poshankactl close <id>` | `Close` | Dismiss one |
-| `poshankactl pause` / `unpause` | `Pause` / `Unpause` | Stop/show new notifications |
-
-Post-v0 (mako parity only): e.g. `poshankactl mode …` when modes are implemented.
-
-### 5.5 Optional features (post-core)
-
-| Feature (example) | Responsibility |
-| ----------------- | -------------- |
-| `icons` | FreeDesktop name + filesystem path icons |
-| `svg` | SVG via `resvg` (optional polish) |
-| `markup` | `body-markup` + Pango body (only if mako parity) |
+- Pointer: whole-card click per §5.3.
+- Seat: pointer required for v0.
 
 ---
 
 ## 6. Module catalog (`libposhanka`)
 
-Each directory: `mod.rs` + **`tests.rs`**.
-
 | Module | Responsibility |
 | ------ | -------------- |
-| `model` | `Notification`, `Urgency`, `Action`, `DaemonSpec`, `CardStyle` |
-| `queue` | Monotonic ids, stack order, replace-by-id, timeout registration |
+| `model` | `NotificationView`, `Urgency`, `CardStyle`, map from ctl JSON |
 | `render` | `measure_card`, `paint_card` → pixel buffer |
-| `wayland` | Globals, surfaces, configure, buffer attach, pointer dispatch |
-| `dbus` | `notifications/` + `control/` zbus servers; shared Tokio + `mpsc` to Wayland thread |
-| `icon` | Resolve `app_icon` hint (Phase 6) |
-| `spawn` | Shared Tokio runtime + `sh -c` |
+| `wayland` | Globals, surfaces, SHM, pointer → ctl commands |
+| `notred` | Child `subscribe`, parse NDJSON, `run_ctl(&["close", id])` helpers |
+| `icon` | Resolve `icon` from JSON (Phase 5) |
 
 ---
 
-## 7. Quality gates
+## 7. CI notes (poshanka-specific)
 
-Whenever a phase is marked complete:
+Quality gates: [ARCHITECTURE.md §6–§8](./ARCHITECTURE.md#6-testing-and-coverage).
 
-- `cargo fmt --check`
-- `typos`
-- `cargo deny check licenses` (populate `deny.toml` allow list before enforcing in CI)
-- `cargo clippy --workspace --all-targets --no-default-features -- -D warnings`
-- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- `cargo test --workspace --no-default-features`
-- `cargo test --workspace --all-features`
-- `cargo doc --workspace --no-deps`
-
-### 7.1 Test discipline
-
-- Unit tests in **`tests.rs`** next to `mod.rs`.
-- Integration tests under `poshanka` (config/theme TOML), `poshankactl` (ctl client), and `libposhanka/tests/` (queue ordering, render pixel samples, dbus with `zbus` test bus if feasible).
-
-### 7.2 CI
-
-Workflows must target **`libposhanka`**, **`poshanka`**, and **`poshankactl`** (`cargo test --workspace`, etc.). Install **libcairo2-dev**, **libpango1.0-dev** for the daemon path. D-Bus tests: document headless strategy (dbus-test-runner or skip with issue link) in Phase 4.
+- Workspace members: **`libposhanka`**, **`poshanka`** only (drop `poshankactl` when migration lands).
+- **libcairo2-dev**, **libpango1.0-dev** for render tests.
+- **notred** + **notredctl** required for integration/manual tests — install from [notred](https://github.com/Gigas002/notred) or CI services block; unit tests mock NDJSON fixtures from `examples/notred-fixtures/`.
+- Headless: queue diff, JSON parse, render pixels — no compositor, no live notred.
 
 ---
 
 ## 8. Phased steps
 
-### Phase 0 — Workspace + hygiene + empty vertical slice
+### Phase 0 — Workspace + hygiene + empty vertical slice ✅
 
-- [x] **Purge abar from the repo** (complete before other Phase 0 work):
-  - [x] Delete the `abar/` tree (vendored copy of the sibling bar project).
-  - [x] Delete `docs/ABAR_PLAN.md` (lives in the [abar](https://github.com/Gigas002/abar) repo, not here).
-  - [x] Fix root `Cargo.toml`: workspace `package` metadata for **poshanka** (homepage, repository, description, keywords — no abar URLs).
-  - [x] Root `Cargo.toml` **`members`**: `["libposhanka", "poshanka", "poshankactl"]` (three crates; see §2).
-  - [x] Update `.github/workflows/*` so every `cargo -p`, archive name, Codecov flag, and deploy/publish step references **`poshanka`** / **`libposhanka`** only.
-  - [x] Grep tracked files: `rg -i 'abar|libabar' --glob '!docs/PLAN.md'` returns **no matches** (this plan may link to the external sibling repo only).
-- [x] Scaffold `libposhanka` + `poshanka` with tracing in daemon binary.
-- [x] Scaffold **`poshankactl/`** crate (stub `main`, workspace member).
-- [x] `libposhanka`: connect Wayland, bind layer shell, show **one** solid-color overlay rect (theme background) — no text.
-- [x] `poshanka`: load minimal `config.toml` / `theme.toml` (font + colors only); exit with structured error on missing files if strict.
-- [x] Populate **`deny.toml`** license allow list for Wayland stack crates (cairo/pango added in Phase 2).
+Completed under the **pre-notred** plan (three crates, Wayland color rect, config/theme load). Artifacts to revisit in Phase 1b: **`poshankactl/`** stub, D-Bus-oriented descriptions in manifests.
 
-**Verify**: all gates in §7; `rg -i 'abar|libabar' --glob '!docs/PLAN.md'` empty; manual run on Hyprland (or any layer-shell compositor).
+### Phase 1 — Config + theme + runtime spec ✅
 
-### Phase 1 — Config + theme + runtime spec
+Completed: serde for `examples/**`, override merge, `Settings` → `DaemonSpec` / `CardStyle`. **Follow-up in Phase 1b:** trim config schema to visual-only; add `[notred]` section; move timeout/queue/events docs to notred.
 
-- [x] Serde models matching `examples/config.toml`, `examples/theme.toml`, and fragment overrides (`[override]`, `[paths].overrides`, `[events]`, theme tables).
-- [x] Load + merge override fragments; resolve `theme` paths relative to config directory.
-- [x] XDG path resolution + `--config` (`clap`; `--theme` removed — theme path is config-only).
-- [x] `Settings::resolve` → `DaemonSpec` + `CardStyle` plain structs for `libposhanka` (include resolved `[events]` per matched override).
+### Phase 1b — notred pivot (migration)
 
-**Verify**: unit tests deserialize all `examples/**` configs/themes; merge smoke tests; no Wayland required.
+- [ ] Remove **`poshankactl/`** from workspace; delete crate tree.
+- [ ] Update root `Cargo.toml` description (“Wayland subscriber for notred”).
+- [ ] Add `examples/scripts/notred-subscribe.sh` (tray.sh pattern).
+- [ ] Add `examples/notred-fixtures/*.jsonl` golden lines for subscribe/list parsing tests.
+- [ ] Strip any D-Bus / `zbus` deps and plan-only modules from `libposhanka`.
+- [ ] Rename `DaemonSpec` → `SubscriberSpec` (or equivalent) — placement/layer/notred wiring only.
+- [ ] Document two-process setup in README sketch: `notred` + `poshanka`.
+
+**Verify**: workspace builds with two members; `rg poshankactl` / `zbus` clean; fixture parse tests green.
 
 ### Phase 2 — Render core (Cairo + Pango)
 
-- [ ] Implement `color`, `render/font`, rounded rect, BGRA buffer (port from [abar](https://github.com/Gigas002/abar) if useful).
-- [ ] `measure_card` / `paint_card` with summary + body only (placeholder icon).
-- [ ] Headless tests: non-transparent pixels in card bbox; text layout sanity.
+- [ ] `color`, `render/font`, rounded rect, BGRA buffer (port from [abar](https://github.com/Gigas002/abar) if useful).
+- [ ] `measure_card` / `paint_card` with summary + body (placeholder icon).
+- [ ] Headless render tests.
 
-**Verify**: `libposhanka` render tests pass without compositor.
+**Verify**: `libposhanka` render tests without compositor or notred.
 
-### Phase 3 — Wayland surfaces + card click (pre–D-Bus)
+### Phase 3 — notredctl subscriber loop
 
-- [ ] One layer surface per notification card (or documented alternative).
-- [ ] SHM buffer resize on configure; paint via Phase 2.
-- [ ] Pointer: whole-card click → dismiss only (queue removes, surface destroyed); `ActionInvoked` wired in Phase 5.
-- [ ] Wakeup pipe + `poll` loop (nonblocking Wayland dispatch).
+- [ ] `notred/`: spawn subscribe child, parse NDJSON, reconnect with backoff.
+- [ ] `notredctl list` on startup; map JSON → `model::NotificationView`.
+- [ ] Unit tests with golden fixtures; optional `#[ignore]` test with live notred.
 
-**Verify**: manual show/hide with a test harness calling `libposhanka` directly (pre-D-Bus).
+**Verify**: manual — `notred` running, `poshanka` logs parsed item count on `notify-send`.
 
-### Phase 4 — D-Bus server + queue (Notify path)
+### Phase 4 — Wayland surfaces + sync
 
-- [ ] `dbus/notifications/`: request name `org.freedesktop.Notifications`, register object, implement `Notify`, `GetCapabilities`, `GetServerInformation`.
-- [ ] `queue/`: assign ids, stack ordering, `replaces_id`.
-- [ ] `Notify` → enqueue → create surface → paint.
-- [ ] `CloseNotification` + emit `NotificationClosed`.
-- [ ] `Ping` on control interface only (proves bus registration + client path); full control methods in Phase 4b.
+- [ ] One layer surface per notification id from subscribe snapshots.
+- [ ] SHM resize on configure; paint via Phase 2.
+- [ ] Diff `update` items → create/destroy/reposition surfaces.
+- [ ] Wakeup pipe + `poll` loop.
 
-**Verify**: `dbus-send` / `notify-send` manual test; unit tests for id/replace logic; `poshankactl ping` succeeds while daemon runs.
+**Verify**: manual on Hyprland — `notify-send` shows themed card via notred + poshanka.
 
-### Phase 4b — Control plane + `poshankactl` crate (makoctl parity)
+### Phase 5 — Pointer + activate/close
 
-- [ ] `libposhanka/src/dbus/control/`: implement `org.poshanka.Daemon1` server (`CloseAll`, `Close`, `Reload`, `Pause`, `Unpause`).
-- [ ] Map control calls to `mpsc` commands handled on Wayland thread (same as `Notify`).
-- [ ] **`poshankactl/`** crate: `ping`, `reload`, `close-all`, `close <id>`, `pause`, `unpause` via zbus proxy (`poshankactl/src/dbus/`, `poshankactl/src/cli/`).
-- [ ] Second **`poshanka`** instance: fail fast if bus name already owned (clear error message). Control traffic uses **`poshankactl`** only, not `poshanka`.
+- [ ] Whole-card click → `notredctl close <id>` or `activate <id>`.
+- [ ] Surfaces removed when id absent from next `update`.
 
-**Verify**: integration test with zbus test bus or documented manual script; `poshankactl reload` picks up theme change without restart.
-
-### Phase 5 — Client actions (protocol only; no button UI, ever)
-
-- [ ] Parse and store `actions` from `Notify` (for `ActionInvoked` only — **no** action button rendering, now or later).
-- [ ] Card click: run optional `[events]` shell for that button, then **always** emit `ActionInvoked` when actions exist (§3.2); pick action key (`default` preferred).
-- [ ] `on_notify` → spawn shell when notification is shown.
-- [ ] Dismiss after handling; correct `NotificationClosed` / `ActionInvoked` ordering for clients (e.g. wayshot).
-
-**Verify**: `notify-send` / wayshot with `--action`; `dbus-monitor` shows `ActionInvoked`; optional `[events]` shell runs before signal.
+**Verify**: tap dismisses; `notify-send --action` + tap → `dbus-monitor` shows `ActionInvoked` from **notred**.
 
 ### Phase 6 — Icons
 
-- [ ] `icon/`: `app_icon` as Freedesktop name or absolute path; PNG → Cairo.
-- [ ] Feature `icons` (default on for binary); fail startup or degrade gracefully — **document in examples**.
-- [ ] Update `GetCapabilities` to include `icon-static` when enabled.
+- [ ] `icon/`: use `icon.name` / `icon.path` from JSON; PNG → Cairo.
+- [ ] Feature `icons` (default on for binary).
 
-**Verify**: fixture icon theme tests; manual `notify-send -i`.
+**Verify**: `notify-send -i`; fixture tests.
 
-### Phase 7 — Timeouts, urgency, stack limits
+### Phase 7 — Polish + first release
 
-- [ ] Map urgency → theme colors + default timeout from config.
-- [ ] Tokio timers: auto-dismiss → `NotificationClosed` reason timeout.
-- [ ] `max_visible`: drop oldest or reject new — document policy.
-- [ ] Honor `Notify` timeout override (`-1` persist).
-
-**Verify**: unit tests for timeout math; manual short/long notifications.
-
-### Phase 8 — Polish + first release
-
-- [ ] README: deps, `XDG_CONFIG_HOME`, `dbus-send` examples, compositor requirements.
+- [ ] README: install **notred** + **notredctl**, poshanka config paths, `notify-send` smoke test.
 - [ ] CHANGELOG; tag **v0.1.0**.
-- [ ] Desktop file / dbus service activation — **optional** if scope creep; otherwise document `exec poshanka` in README.
+- [ ] Optional: sample systemd user units (notred from upstream + poshanka).
 
-**Verify**: full §7 gates + dogfood with common apps (fcitx, browsers, etc.).
+**Verify**: [ARCHITECTURE.md §8](./ARCHITECTURE.md#8-quality-gates--required-before-every-commit) gates; dogfood with common apps.
 
-### Post-first-release (optional, mako-aligned only)
+### Post-first-release (optional)
 
-- [ ] **Progress** rendering (`value` hint + theme `[progress]` `over`/`source`) if not finished in v0.
-- [ ] **body-markup** only if we match mako’s markup handling and advertise the capability.
-- [ ] Richer **override criteria** (mako-style `category`, `desktop-entry`, …) — still fragment-based, not dunst scripts.
-- [ ] **Modes** / DND-style visibility (mako `makoctl mode` parity) if needed.
-- [ ] Single-surface stack optimization if profiling warrants it.
-
-Do **not** add post-v1 items for dunst history, inhibition, `image-data` body images, or sound daemon unless mako gains them first.
+- [ ] Progress bar (`value` hint via notred JSON when available).
+- [ ] body-markup (coordinate capability with notred).
+- [ ] Richer theme override criteria (`category`, `desktop-entry`, …).
+- [ ] Single-surface stack optimization.
 
 ---
 
-## 9. Definition of done (v0 / first working draft)
+## 9. Definition of done (v0)
 
-- [ ] `notify-send` displays stacked notifications on Wayland with theme from `examples/theme.toml`.
-- [ ] Placement, gaps, and `max_visible` behave per config.
-- [ ] Urgency colors and timeouts work; persistent notifications (`timeout = -1`) stay until dismissed.
-- [ ] Card tap emits `ActionInvoked` when client sent actions (§3.2); `[events]` shell is additive; dismiss emits `NotificationClosed` with correct reason codes.
-- [ ] **No** GTK/iced; Cairo+Pango path is live.
-- [ ] **zbus** only for session D-Bus (notification + control); no libdbus; no v0 Unix control socket.
-- [ ] **`poshankactl`** works against a running daemon (`reload`, `close-all`, `pause`, …).
-- [ ] CI green on default / all-features / no-default-features; docs build.
-
----
-
-## 10. Dependency policy
-
-- **Edition**: `2024`.
-- **Versions**: `x.y` or `x` in manifests; lockfile committed.
-- **Async runtime**: **`tokio`** in **`libposhanka`** — lean features (`rt-multi-thread`, `process`, `time`, `macros`).
-- **D-Bus**: **`zbus`** with default feature on shipped binary; justify in PR.
-- **Graphics**: `cairo-rs`, `pango`, `pangocairo` aligned to one gtk-rs minor.
-- **Wayland**: `wayland-client`, `wayland-protocols-wlr` — pin versions in workspace `Cargo.toml`.
+- [ ] **`notred`** owns FDN; **`notify-send`** reaches cards when **`poshanka`** is running.
+- [ ] Theme from `examples/theme.toml`; placement and gap per poshanka config.
+- [ ] Subscribe feed via **`notredctl`** only (direct spawn or `subscribe_exec` script).
+- [ ] Card tap → `notredctl activate` or `close`; FDN signals originate from **notred**.
+- [ ] **No** GTK/iced; Cairo+Pango path live.
+- [ ] **No** `poshankactl`, **no** `zbus`, **no** `notred.sock` in poshanka.
+- [ ] CI green per [ARCHITECTURE.md §8](./ARCHITECTURE.md#8-quality-gates--required-before-every-commit).
 
 ---
 
-## 11. Implementation pattern checklist
+## 10. Stack dependencies (poshanka-specific)
 
-When porting from the external [abar](https://github.com/Gigas002/abar) repo, map concerns as follows:
+Generic policy: [ARCHITECTURE.md §7](./ARCHITECTURE.md#7-dependencies).
 
-| Concern | poshanka module |
-| ------- | --------------- |
+| Area | Crates / notes |
+| ---- | -------------- |
+| Graphics | `cairo-rs`, `pango`, `pangocairo` — one gtk-rs minor |
+| Wayland | `wayland-client`, `wayland-protocols-wlr` |
+| JSON | `serde`, `serde_json` — parse notredctl stdout |
+| External binaries | **`notred`**, **`notredctl`** — not Cargo deps; required at runtime |
+
+---
+
+## 11. Pattern checklist (abar tray → poshanka notred)
+
+| abar concern | poshanka module |
+| ------------ | --------------- |
+| `[tray].exec` long-lived script | `[notred].subscribe_exec` or built-in reconnect loop |
+| `trayctl subscribe` stdout JSON | `notredctl subscribe` NDJSON → `notred/` parser |
+| Tray item click → external action | Card click → `notredctl activate` / `close` |
 | Hex RGBA → buffer | `libposhanka/src/color/` |
-| Font metrics | `libposhanka/src/render/` |
-| Rounded rects | `libposhanka/src/render/` |
-| SHM buffer lifecycle | `libposhanka/src/wayland/` (per-notification surface) |
-| Async shell commands | `libposhanka/src/spawn/` |
-| Settings boundary | `poshanka/src/settings/` → `DaemonSpec` |
-| Error split | lib vs bin `error.rs` |
+| Font / rounded rects | `libposhanka/src/render/` |
+| SHM lifecycle | `libposhanka/src/wayland/` |
+| Settings boundary | `poshanka/src/settings/` → `SubscriberSpec` + `CardStyle` |
 | Poll + wakeup | `libposhanka/src/wayland/` |
 
-**Never** add the sibling bar library as a Cargo dependency.
+**Never** add `libnotred`, `libabar`, or a custom socket client as dependencies.
 
 ---
 
 ## 12. Document maintenance
 
-Update this plan when:
-
-- feature set or D-Bus surface changes
-- examples change — update `examples/*.toml` first, then this doc
-- surface strategy (one vs many `wl_surface`) changes
+Update this plan when subscriber behavior, config schema, or notredctl command usage changes. Update [ARCHITECTURE.md](./ARCHITECTURE.md) for workspace-wide conventions. For poshanka config: `examples/*.toml` first, then this doc. For FDN/queue/timeouts: [notred](https://github.com/Gigas002/notred) docs only.
 
 ---
 
 ## Revision history
 
-| Date       | Change                                                                 |
-| ---------- | ---------------------------------------------------------------------- |
-| 2026-05-18 | Initial poshanka plan (WAU-style discipline + dunst goals) |
-| 2026-05-18 | §5 IPC: notification vs control D-Bus planes; Phase 4b; single-instance via bus name |
-| 2026-05-18 | Phase 0: purge all `abar` / `libabar` from repo; external abar link only |
-| 2026-06-02 | §3: `examples/` config system — override fragments, `[events]`, theme tables, action buttons not planned (card tap + `ActionInvoked` only), no user `[server]`/`[capabilities]`/hint params |
-| 2026-06-02 | §1.5: mako as primary behavioral reference; dunst secondary |
-| 2026-06-02 | §5.4 / Phase 4b: **`poshankactl`** crate (makoctl parity), third workspace member beside **`poshanka`** / **`libposhanka`** |
+| Date | Change |
+| ---- | ------ |
+| 2026-05-18 | Initial poshanka plan (monolithic daemon model) |
+| 2026-06-02 | `examples/` config system; mako primary reference |
+| 2026-07-03 | Trim duplication; [ARCHITECTURE.md](./ARCHITECTURE.md) structural source of truth |
+| 2026-07-03 | **notred pivot:** poshanka = Wayland subscriber via **`notredctl`**; drop FDN/`poshankactl`; abar tray exec pattern |
