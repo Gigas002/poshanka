@@ -1,0 +1,2 @@
+{"v":1,"cmd":"subscribe"}
+{"v":1,"type":"event","event":{"kind":"update","items":[{"id":1,"app_id":"firefox","summary":"Hello","body":"World","urgency":"normal","timeout_ms":10000,"has_actions":false}]}}

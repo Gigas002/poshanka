@@ -5,13 +5,18 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Wayland layer-shell notification daemon runtime."
+description = "Wayland popup subscriber runtime — render, surfaces, provider feed I/O."
 
 [features]
 default = []
 
 [dependencies]
+cairo-rs = { version = "0.22", default-features = false, features = ["png"] }
+pango = { version = "0.22", features = ["v1_42"] }
+pangocairo = "0.22"
 rustix = { version = "1", features = ["event"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 tracing = "0.1"

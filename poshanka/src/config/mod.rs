@@ -8,12 +8,10 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub paths: Paths,
+    pub provider: ProviderConfig,
     pub stack: Stack,
     pub placement: Placement,
-    pub queue: Queue,
-    pub timeouts: Timeouts,
     pub layer: LayerConfig,
-    pub events: Option<Events>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -24,46 +22,24 @@ pub struct Paths {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct ProviderConfig {
+    /// Long-running feed script (abar `[tray].exec` analogue). Prints NDJSON on stdout.
+    pub exec: Option<String>,
+    /// Optional CLI for one-shot provider commands (`close`, `activate`, `input`, …).
+    pub command: Option<String>,
+    /// Optional socket path forwarded to the provider CLI by the binary/script.
+    pub socket: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Stack {
-    pub max: u32,
+    pub gap: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Placement {
     pub anchor: String,
-    pub gap: u32,
     pub margin: u32,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Queue {
-    pub history: bool,
-    pub max: u32,
-    pub sort: SortBy,
-    pub order: SortOrder,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum SortBy {
-    Time,
-    Priority,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum SortOrder {
-    Asc,
-    Desc,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Timeouts {
-    pub ignore: bool,
-    pub default: u64,
-    pub low: u64,
-    pub normal: u64,
-    pub critical: u64,
 }
 
 /// The `[layer]` table. Field name `layer` inside matches the TOML key.
@@ -82,22 +58,12 @@ pub enum LayerShell {
     Overlay,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct Events {
-    pub on_button_left: Option<String>,
-    pub on_button_middle: Option<String>,
-    pub on_button_right: Option<String>,
-    pub on_notify: Option<String>,
-    pub on_touch: Option<String>,
-}
-
 /// Override fragment config (`<fragment>/config.toml`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct FragmentConfig {
     #[serde(rename = "override")]
     pub override_meta: OverrideMeta,
     pub paths: Option<FragmentPaths>,
-    pub events: Option<Events>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

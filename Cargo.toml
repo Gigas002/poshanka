@@ -1,12 +1,12 @@
 [workspace]
-members = ["libposhanka", "poshanka", "poshankactl"]
+members = ["libposhanka", "poshanka"]
 resolver = "3"
 
 [workspace.package]
 edition = "2024"
 license = "GPL-3.0-only"
 homepage = "https://github.com/Gigas002/poshanka"
-description = "Minimalistic wayland-native notification daemon, inspired by dunst"
-keywords = ["wayland", "notifications", "pango", "cairo", "dunst"]
+description = "Wayland popup subscriber for notred"
+keywords = ["wayland", "notifications", "notred", "pango", "cairo", "mako"]
 repository = "https://github.com/Gigas002/poshanka"
 version = "0.1.0"

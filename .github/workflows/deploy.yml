@@ -30,15 +30,12 @@ jobs:
       - name: Build release binaries
         run: |
           cargo build -p poshanka --release
-          cargo build -p poshankactl --release
 
       - name: Strip and package
         run: |
           VERSION="${GITHUB_REF_NAME:-dev}"
           strip target/release/poshanka
-          strip target/release/poshankactl
           tar -czf "poshanka-${VERSION}-x86_64-linux.tar.gz" -C target/release poshanka
-          tar -czf "poshankactl-${VERSION}-x86_64-linux.tar.gz" -C target/release poshankactl
 
       - name: Create GitHub Release
         if: github.event_name == 'push'

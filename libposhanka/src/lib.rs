@@ -1,9 +1,20 @@
 pub mod color;
 pub mod error;
+pub mod feed;
 pub mod model;
+pub mod render;
+pub mod subscriber;
 pub mod wayland;
 
 pub use color::{ParseHexRgbaError, parse_hex_rgba, parse_hex_rgba_to_bgra, rgba_to_bgra};
 pub use error::PoshankaError;
-pub use model::{CardEvents, CardStyle, DaemonSpec, IconPos, OverlaySpec, ProgressMode, TextAlign};
-pub use wayland::run_overlay;
+pub use feed::{
+    CommandError, FeedEvent, FeedMessage, FeedSignal, NotificationState, ParseFeedError,
+    ProviderSpec, activate, close, fetch_list, input, parse_line, run_command, spawn_feed_exec,
+};
+pub use model::{
+    CardStyle, IconPos, NotificationView, ProgressMode, SubscriberSpec, TextAlign, Urgency,
+};
+pub use render::{ComputedCard, FontContext, Frame, measure_card, paint_card};
+pub use subscriber::{SubscriberRun, run as run_subscriber};
+pub use wayland::{FeedHandle, StyleSource, run_overlay};
