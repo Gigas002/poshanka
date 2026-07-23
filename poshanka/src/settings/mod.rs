@@ -1,10 +1,7 @@
-#![allow(dead_code)] // Override helpers used in Phase 4+
-
 use std::path::{Path, PathBuf};
 
 use libposhanka::{
-    CardStyle, IconPos, OverlaySpec, ProgressMode, SubscriberSpec, TextAlign,
-    parse_hex_rgba_to_bgra,
+    CardStyle, IconPos, ProgressMode, SubscriberSpec, TextAlign, parse_hex_rgba_to_bgra,
 };
 
 use crate::config::{Config, FragmentConfig, LayerShell, OverrideType, UrgencyLevel};
@@ -227,14 +224,9 @@ fn build_card_style(theme: &Theme) -> Result<CardStyle, crate::error::Error> {
 
 /// Build a `CardStyle` from a merged (post-override) theme.
 ///
-/// Used at notification time in Phase 4 after `apply_layers`.
+/// Called at notification-paint time (see `app::style`) after `apply_layers`.
 pub fn card_style_from_theme(theme: &Theme) -> Result<CardStyle, crate::error::Error> {
     build_card_style(theme)
-}
-
-/// Derive a Phase 0 overlay spec from a `CardStyle` (backward compat until Phase 4).
-pub fn overlay_spec_from_card(card: &CardStyle) -> OverlaySpec {
-    OverlaySpec::new(card.width, card.height, card.background_bgra)
 }
 
 #[cfg(test)]

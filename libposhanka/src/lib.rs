@@ -13,9 +13,8 @@ pub use feed::{
     ProviderSpec, activate, close, fetch_list, input, parse_line, run_command, spawn_feed_exec,
 };
 pub use model::{
-    CardStyle, IconPos, NotificationView, OverlaySpec, ProgressMode, SubscriberSpec, TextAlign,
-    Urgency,
+    CardStyle, IconPos, NotificationView, ProgressMode, SubscriberSpec, TextAlign, Urgency,
 };
 pub use render::{ComputedCard, FontContext, Frame, measure_card, paint_card};
 pub use subscriber::{SubscriberRun, run as run_subscriber};
-pub use wayland::{FeedHandle, run_overlay};
+pub use wayland::{FeedHandle, StyleSource, run_overlay};

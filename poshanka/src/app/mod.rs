@@ -1,9 +1,12 @@
+mod style;
+
 use std::path::Path;
 
 use libposhanka::{ProviderSpec, SubscriberRun, run_subscriber};
 
-use crate::settings::{Settings, overlay_spec_from_card};
+use crate::settings::Settings;
 use crate::theme;
+use style::OverrideStyleSource;
 
 pub fn run(settings: &Settings, config_path: &Path) -> std::process::ExitCode {
     let mut provider = ProviderSpec::from(&settings.subscriber);
@@ -15,9 +18,18 @@ pub fn run(settings: &Settings, config_path: &Path) -> std::process::ExitCode {
         );
     }
 
+    let style_source = match OverrideStyleSource::load(config_path) {
+        Ok(source) => source,
+        Err(err) => {
+            tracing::error!(%err, path = %config_path.display(), "failed to load override style source");
+            return std::process::ExitCode::from(1);
+        }
+    };
+
     let run = SubscriberRun {
         provider,
-        overlay: overlay_spec_from_card(&settings.card),
+        stack: settings.subscriber.clone(),
+        style_source: Box::new(style_source),
     };
 
     match run_subscriber(run) {
@@ -28,3 +40,6 @@ pub fn run(settings: &Settings, config_path: &Path) -> std::process::ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
