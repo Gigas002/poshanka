@@ -1,4 +1,6 @@
-//! `zwlr_layer_shell_v1` overlay: one Wayland surface per notification `id`.
+//! `zwlr_layer_shell_v1` overlay: one Wayland surface per notification `id`,
+//! replicated on every connected output (or a single named output when
+//! `[layer].output` is set).
 //!
 //! Each visible notification (per the provider feed snapshot) gets its own
 //! layer-shell surface, sized and painted via [`crate::render::paint_card`].
@@ -16,8 +18,8 @@ use std::sync::mpsc;
 use rustix::event::{PollFd, PollFlags, poll};
 use tracing::{debug, info, warn};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
-    wl_touch,
+    wl_buffer, wl_compositor, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_surface, wl_touch,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::{
@@ -101,6 +103,8 @@ pub fn run_overlay(
         pointer: None,
         touch: None,
         pointer_focus: None,
+        output_filter: stack_spec.output.clone(),
+        outputs: HashMap::new(),
         surfaces: HashMap::new(),
     };
 
@@ -191,7 +195,21 @@ struct AppState {
     touch: Option<wl_touch::WlTouch>,
     /// Notification `id` of the card currently under the pointer, if any.
     pointer_focus: Option<u32>,
-    surfaces: HashMap<u32, CardSurface>,
+    /// `[layer].output` config: empty means "every connected output";
+    /// otherwise the `wl_output` name to match (see [`OutputEntry`]).
+    output_filter: String,
+    /// Known `wl_output` globals, keyed by `wl_registry` name.
+    outputs: HashMap<u32, OutputEntry>,
+    /// Live card surfaces, keyed by `(wl_registry` output name`, notification id)`
+    /// so each notification gets one surface per eligible output.
+    surfaces: HashMap<(u32, u32), CardSurface>,
+}
+
+/// A bound `wl_output` global and its name (from the `wl_output::Event::Name`
+/// event, `wl_output` version ≥ 4), used to match `[layer].output`.
+struct OutputEntry {
+    output: wl_output::WlOutput,
+    name: Option<String>,
 }
 
 /// Per-notification layer-shell surface and its SHM buffer state.
@@ -242,8 +260,27 @@ impl AppState {
         self.compositor.is_some() && self.shm.is_some() && self.layer_shell.is_some()
     }
 
-    /// Diff the current notification snapshot against live surfaces, then
-    /// create/destroy/reposition/repaint as needed.
+    /// Whether `entry` should get a card stack: every output when
+    /// `[layer].output` is empty, otherwise only the output whose
+    /// `wl_output::Event::Name` matches it exactly.
+    fn output_matches(&self, entry: &OutputEntry) -> bool {
+        if self.output_filter.is_empty() {
+            return true;
+        }
+        entry.name.as_deref() == Some(self.output_filter.as_str())
+    }
+
+    /// `wl_registry` names of currently eligible outputs (see [`Self::output_matches`]).
+    fn eligible_output_keys(&self) -> Vec<u32> {
+        self.outputs
+            .iter()
+            .filter(|(_, entry)| self.output_matches(entry))
+            .map(|(key, _)| *key)
+            .collect()
+    }
+
+    /// Diff the current notification snapshot (across every eligible output)
+    /// against live surfaces, then create/destroy/reposition/repaint as needed.
     fn try_sync_stack(&mut self, qh: &QueueHandle<Self>) {
         if !self.dirty || !self.globals_ready() {
             return;
@@ -251,16 +288,20 @@ impl AppState {
         self.dirty = false;
 
         let items: Vec<NotificationView> = self.notifications.items().to_vec();
-        let keep_ids: HashSet<u32> = items.iter().map(|v| v.id).collect();
+        let output_keys = self.eligible_output_keys();
+        let keep_keys: HashSet<(u32, u32)> = output_keys
+            .iter()
+            .flat_map(|&output_key| items.iter().map(move |v| (output_key, v.id)))
+            .collect();
 
-        let stale: Vec<u32> = self
+        let stale: Vec<(u32, u32)> = self
             .surfaces
             .keys()
             .copied()
-            .filter(|id| !keep_ids.contains(id))
+            .filter(|key| !keep_keys.contains(key))
             .collect();
-        for id in stale {
-            if let Some(card) = self.surfaces.remove(&id) {
+        for key in stale {
+            if let Some(card) = self.surfaces.remove(&key) {
                 card.destroy();
             }
         }
@@ -286,16 +327,23 @@ impl AppState {
 
         for ((id, fallback_bgra, frame), offset) in rendered.into_iter().zip(offsets) {
             let margin = self.corner.margins(self.base_margin, offset);
-            self.upsert_surface(
-                qh,
-                id,
-                frame,
-                fallback_bgra,
-                margin,
-                &compositor,
-                &layer_shell,
-                &shm,
-            );
+            for &output_key in &output_keys {
+                let Some(output) = self.outputs.get(&output_key).map(|e| e.output.clone()) else {
+                    continue;
+                };
+                self.upsert_surface(
+                    qh,
+                    output_key,
+                    &output,
+                    id,
+                    frame.clone(),
+                    fallback_bgra,
+                    margin,
+                    &compositor,
+                    &layer_shell,
+                    &shm,
+                );
+            }
         }
     }
 
@@ -303,6 +351,8 @@ impl AppState {
     fn upsert_surface(
         &mut self,
         qh: &QueueHandle<Self>,
+        output_key: u32,
+        output: &wl_output::WlOutput,
         id: u32,
         frame: Frame,
         fallback_bgra: [u8; 4],
@@ -311,7 +361,8 @@ impl AppState {
         layer_shell: &ZwlrLayerShellV1,
         shm: &wl_shm::WlShm,
     ) {
-        if let Some(card) = self.surfaces.get_mut(&id) {
+        let key = (output_key, id);
+        if let Some(card) = self.surfaces.get_mut(&key) {
             card.fallback_bgra = fallback_bgra;
             let size_changed = card.requested_size != (frame.width, frame.height);
             let margin_changed = card.margin != margin;
@@ -341,9 +392,15 @@ impl AppState {
             return;
         }
 
-        let surface = compositor.create_surface(qh, id);
-        let layer_surface =
-            layer_shell.get_layer_surface(&surface, None, self.layer, "poshanka".into(), qh, id);
+        let surface = compositor.create_surface(qh, key);
+        let layer_surface = layer_shell.get_layer_surface(
+            &surface,
+            Some(output),
+            self.layer,
+            "poshanka".into(),
+            qh,
+            key,
+        );
 
         layer_surface.set_anchor(self.corner.anchor_bits());
         let (top, right, bottom, left) = margin;
@@ -353,7 +410,7 @@ impl AppState {
         surface.commit();
 
         self.surfaces.insert(
-            id,
+            key,
             CardSurface {
                 surface,
                 layer_surface,
@@ -371,7 +428,7 @@ impl AppState {
 
     fn on_configure(
         &mut self,
-        id: u32,
+        key: (u32, u32),
         layer_surface: &ZwlrLayerSurfaceV1,
         serial: u32,
         width: u32,
@@ -383,13 +440,14 @@ impl AppState {
         let Some(shm) = self.shm.clone() else {
             return;
         };
-        let Some(card) = self.surfaces.get_mut(&id) else {
+        let Some(card) = self.surfaces.get_mut(&key) else {
             return;
         };
 
         let width = width.max(1);
         let height = height.max(1);
         card.configured = true;
+        let id = key.1;
 
         let result = match card.pending_frame.take() {
             Some(frame) if frame.width == width && frame.height == height => {
@@ -414,9 +472,10 @@ impl AppState {
         }
     }
 
-    fn on_closed(&mut self, id: u32) {
-        debug!(id, "layer surface closed by compositor");
-        self.surfaces.remove(&id);
+    fn on_closed(&mut self, key: (u32, u32)) {
+        let id = key.1;
+        debug!(id, output = key.0, "layer surface closed by compositor");
+        self.surfaces.remove(&key);
         if self.pointer_focus == Some(id) {
             self.pointer_focus = None;
         }
@@ -584,42 +643,97 @@ impl Dispatch<wl_registry::WlRegistry, ()> for AppState {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        let wl_registry::Event::Global {
-            name,
-            interface,
-            version,
-        } = event
-        else {
-            return;
-        };
-
-        match interface.as_str() {
-            "wl_compositor" => {
-                let compositor = registry.bind::<wl_compositor::WlCompositor, _, _>(
-                    name,
-                    5.min(version),
-                    qh,
-                    (),
-                );
-                state.compositor = Some(compositor);
-                state.try_sync_stack(qh);
-            }
-            "wl_shm" => {
-                let shm = registry.bind::<wl_shm::WlShm, _, _>(name, 1.min(version), qh, ());
-                state.shm = Some(shm);
-                state.try_sync_stack(qh);
-            }
-            "zwlr_layer_shell_v1" => {
-                let shell = registry.bind::<ZwlrLayerShellV1, _, _>(name, 4.min(version), qh, ());
-                state.layer_shell = Some(shell);
-                state.try_sync_stack(qh);
-            }
-            "wl_seat" => {
-                let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, 7.min(version), qh, ());
-                state.seat = Some(seat);
+        match event {
+            wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } => match interface.as_str() {
+                "wl_compositor" => {
+                    let compositor = registry.bind::<wl_compositor::WlCompositor, _, _>(
+                        name,
+                        5.min(version),
+                        qh,
+                        (),
+                    );
+                    state.compositor = Some(compositor);
+                    state.try_sync_stack(qh);
+                }
+                "wl_shm" => {
+                    let shm = registry.bind::<wl_shm::WlShm, _, _>(name, 1.min(version), qh, ());
+                    state.shm = Some(shm);
+                    state.try_sync_stack(qh);
+                }
+                "zwlr_layer_shell_v1" => {
+                    let shell =
+                        registry.bind::<ZwlrLayerShellV1, _, _>(name, 4.min(version), qh, ());
+                    state.layer_shell = Some(shell);
+                    state.try_sync_stack(qh);
+                }
+                "wl_seat" => {
+                    let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, 7.min(version), qh, ());
+                    state.seat = Some(seat);
+                }
+                "wl_output" => {
+                    let bound_version = 4.min(version);
+                    if bound_version < 4 && !state.output_filter.is_empty() {
+                        warn!(
+                            name,
+                            bound_version,
+                            "compositor's wl_output does not support Name (needs v4); \
+                             `[layer].output` filter cannot match this output"
+                        );
+                    }
+                    let output =
+                        registry.bind::<wl_output::WlOutput, _, _>(name, bound_version, qh, name);
+                    state
+                        .outputs
+                        .insert(name, OutputEntry { output, name: None });
+                    // No filter configured: this output is eligible immediately,
+                    // without waiting for a `Name` event.
+                    if state.output_filter.is_empty() {
+                        state.dirty = true;
+                    }
+                    state.try_sync_stack(qh);
+                }
+                _ => {}
+            },
+            wl_registry::Event::GlobalRemove { name } if state.outputs.remove(&name).is_some() => {
+                let stale: Vec<(u32, u32)> = state
+                    .surfaces
+                    .keys()
+                    .copied()
+                    .filter(|(output_key, _)| *output_key == name)
+                    .collect();
+                for key in stale {
+                    if let Some(card) = state.surfaces.remove(&key) {
+                        card.destroy();
+                    }
+                }
             }
             _ => {}
         }
+    }
+}
+
+impl Dispatch<wl_output::WlOutput, u32> for AppState {
+    fn event(
+        state: &mut Self,
+        _output: &wl_output::WlOutput,
+        event: wl_output::Event,
+        registry_name: &u32,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        let wl_output::Event::Name { name } = event else {
+            return;
+        };
+        let Some(entry) = state.outputs.get_mut(registry_name) else {
+            return;
+        };
+        entry.name = Some(name);
+        state.dirty = true;
+        state.try_sync_stack(qh);
     }
 }
 
@@ -659,7 +773,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
     ) {
         match event {
             wl_pointer::Event::Enter { surface, .. } => {
-                state.pointer_focus = surface.data::<u32>().copied();
+                state.pointer_focus = surface.data::<(u32, u32)>().map(|key| key.1);
             }
             wl_pointer::Event::Leave { .. } => {
                 state.pointer_focus = None;
@@ -694,41 +808,41 @@ impl Dispatch<wl_touch::WlTouch, ()> for AppState {
         _: &QueueHandle<Self>,
     ) {
         if let wl_touch::Event::Down { surface, .. } = event
-            && let Some(id) = surface.data::<u32>().copied()
+            && let Some(id) = surface.data::<(u32, u32)>().map(|key| key.1)
         {
             state.handle_touch_down(id);
         }
     }
 }
 
-impl Dispatch<ZwlrLayerSurfaceV1, u32> for AppState {
+impl Dispatch<ZwlrLayerSurfaceV1, (u32, u32)> for AppState {
     fn event(
         state: &mut Self,
         layer_surface: &ZwlrLayerSurfaceV1,
         event: zwlr_layer_surface_v1::Event,
-        data: &u32,
+        data: &(u32, u32),
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        let id = *data;
+        let key = *data;
         match event {
             zwlr_layer_surface_v1::Event::Configure {
                 serial,
                 width,
                 height,
-            } => state.on_configure(id, layer_surface, serial, width, height, qh),
-            zwlr_layer_surface_v1::Event::Closed => state.on_closed(id),
+            } => state.on_configure(key, layer_surface, serial, width, height, qh),
+            zwlr_layer_surface_v1::Event::Closed => state.on_closed(key),
             _ => {}
         }
     }
 }
 
-impl Dispatch<wl_surface::WlSurface, u32> for AppState {
+impl Dispatch<wl_surface::WlSurface, (u32, u32)> for AppState {
     fn event(
         _: &mut Self,
         _: &wl_surface::WlSurface,
         _: wl_surface::Event,
-        _: &u32,
+        _: &(u32, u32),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {

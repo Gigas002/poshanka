@@ -390,7 +390,7 @@ Completed: serde for `examples/**`, override merge, `Settings` → `CardStyle` (
 **Notes:**
 
 - `libposhanka::wayland::StyleSource` is the seam between the (provider-agnostic) Wayland card stack and poshanka's TOML theme/override merging — `poshanka::app::style::OverrideStyleSource` implements it, re-reading config/theme/overrides from disk on `reload()`.
-- `[layer].output` is parsed into `SubscriberSpec` but not yet bound to a specific `wl_output`; surfaces are created without an explicit output (compositor default). Deferred — not required by this phase's checklist.
+- `[layer].output` is bound to every connected `wl_output` by default (a card stack is replicated on each), matching mako/dunst behavior; setting it to a specific name (via `wl_output`'s `Name` event, protocol v4+) restricts the stack to that one output. Outputs are tracked dynamically (`wl_registry` `Global`/`GlobalRemove`), so hot-plugged monitors pick up the stack without a restart.
 - Phase 0's single solid-color `OverlaySpec` overlay is removed; the card stack now always paints real notification content.
 
 ### Phase 5 — Pointer input (Layer B + Layer A) ✅ (implementation; manual verify pending)
