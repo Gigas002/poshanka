@@ -70,6 +70,9 @@ pub fn paint_computed(
         }
 
         if let Some(icon) = &computed.icon {
+            #[cfg(feature = "icons")]
+            paint_icon(&cr, style, icon, computed.icon_ref.as_ref())?;
+            #[cfg(not(feature = "icons"))]
             paint_icon_placeholder(&cr, style, icon)?;
         }
 
@@ -114,6 +117,32 @@ pub fn paint_computed(
         stride: row_bytes as i32,
         data,
     })
+}
+
+#[cfg(feature = "icons")]
+fn paint_icon(
+    cr: &Context,
+    style: &CardStyle,
+    icon: &super::measure::IconRect,
+    icon_ref: Option<&crate::model::IconRef>,
+) -> Result<(), PoshankaError> {
+    if let Some(icon_ref) = icon_ref
+        && let Some(path) = crate::icon::resolve_icon_path(icon_ref, &style.icon_theme)
+        && let Ok(surface) =
+            crate::icon::load_icon_surface(&path, icon.size.round().max(1.0) as u32)
+    {
+        cr.save()
+            .map_err(|e| PoshankaError::Render(format!("icon save: {e}")))?;
+        cr.translate(icon.x, icon.y);
+        cr.set_source_surface(&surface, 0.0, 0.0)
+            .map_err(|e| PoshankaError::Render(format!("icon source: {e}")))?;
+        cr.paint()
+            .map_err(|e| PoshankaError::Render(format!("icon paint: {e}")))?;
+        cr.restore()
+            .map_err(|e| PoshankaError::Render(format!("icon restore: {e}")))?;
+        return Ok(());
+    }
+    paint_icon_placeholder(cr, style, icon)
 }
 
 fn paint_icon_placeholder(

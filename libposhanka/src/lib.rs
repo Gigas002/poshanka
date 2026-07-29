@@ -1,6 +1,8 @@
 pub mod color;
 pub mod error;
 pub mod feed;
+#[cfg(feature = "icons")]
+pub mod icon;
 pub mod model;
 pub mod render;
 pub mod subscriber;
@@ -12,8 +14,10 @@ pub use feed::{
     CommandError, FeedEvent, FeedMessage, FeedSignal, NotificationState, ParseFeedError,
     ProviderSpec, activate, close, fetch_list, input, parse_line, run_command, spawn_feed_exec,
 };
+#[cfg(feature = "icons")]
+pub use icon::{load_icon_surface, resolve_icon_path};
 pub use model::{
-    CardStyle, IconPos, NotificationView, ProgressMode, SubscriberSpec, TextAlign, Urgency,
+    CardStyle, IconPos, IconRef, NotificationView, ProgressMode, SubscriberSpec, TextAlign, Urgency,
 };
 pub use render::{ComputedCard, FontContext, Frame, measure_card, paint_card};
 pub use subscriber::{SubscriberRun, run as run_subscriber};

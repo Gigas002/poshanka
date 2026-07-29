@@ -43,6 +43,7 @@ fn test_notification() -> NotificationView {
         urgency: Urgency::Normal,
         timeout_ms: Some(10_000),
         has_actions: false,
+        icon: None,
     }
 }
 

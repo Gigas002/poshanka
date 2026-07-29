@@ -6,7 +6,7 @@ mod state;
 
 use serde::Deserialize;
 
-use crate::model::{NotificationView, Urgency};
+use crate::model::{IconRef, NotificationView, Urgency};
 
 pub use command::{CommandError, activate, close, input, run_command};
 pub use exec::{fetch_list, spawn_feed_exec};
@@ -109,6 +109,25 @@ pub(crate) struct RawNotification {
     timeout_ms: Option<u64>,
     #[serde(default)]
     has_actions: bool,
+    #[serde(default)]
+    icon: Option<RawIcon>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawIcon {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+impl From<RawIcon> for IconRef {
+    fn from(raw: RawIcon) -> Self {
+        Self {
+            name: raw.name,
+            path: raw.path,
+        }
+    }
 }
 
 impl TryFrom<RawEvent> for FeedEvent {
@@ -143,6 +162,7 @@ impl TryFrom<RawNotification> for NotificationView {
             urgency: parse_urgency(&raw.urgency)?,
             timeout_ms: raw.timeout_ms,
             has_actions: raw.has_actions,
+            icon: raw.icon.map(IconRef::from),
         })
     }
 }

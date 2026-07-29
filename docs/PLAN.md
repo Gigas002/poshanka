@@ -339,7 +339,7 @@ Quality gates: [ARCHITECTURE.md §6–§8](./ARCHITECTURE.md#6-testing-and-cover
 
 ## 8. Phased steps
 
-**Status (2026-07-29):** Phases **0–4**, **1b**, and **5** (implementation) done. Phase 5's manual/compositor verification is still outstanding. **Phase 6** (icons) is next. No upstream blockers.
+**Status (2026-07-29):** Phases **0–4**, **1b**, **5** (implementation), and **6** done. Phase 5's manual/compositor verification is still outstanding. **Phase 7** (polish + release) is next. No upstream blockers.
 
 ### Phase 0 — Workspace + hygiene + empty vertical slice ✅
 
@@ -418,12 +418,20 @@ Completed: serde for `examples/**`, override merge, `Settings` → `CardStyle` (
 
 **Verify (5b):** `on_button_right` hook in notred config fires on right-click; poshanka config unchanged.
 
-### Phase 6 — Icons
+### Phase 6 — Icons ✅
 
-- [ ] `icon/`: use `icon.name` / `icon.path` from JSON; PNG → Cairo.
-- [ ] Feature `icons` (default on for binary).
+- [x] `icon/`: use `icon.name` / `icon.path` from JSON; PNG → Cairo.
+- [x] Feature `icons` (default on for binary).
+- [x] SVG support (beyond original scope) via `resvg` — actively maintained pure-Rust renderer; `rsvg` (gtk-rs librsvg bindings) rejected as abandoned per [ARCHITECTURE.md §7.2](./ARCHITECTURE.md#72-active-crates-only).
 
 **Verify**: `notify-send -i`; fixture tests.
+
+**Notes:**
+
+- `libposhanka::icon` (crate-level module, `#[cfg(feature = "icons")]`) resolves `NotificationView.icon` (`IconRef { name, path }`) to a file path: `icon.path` used directly if it exists; `icon.name` looked up as an XDG icon-theme name under `CardStyle::icon_theme` (a theme name or absolute theme-root path), falling back to `hicolor` and finally `/usr/share/pixmaps`.
+- `resvg` is the only new direct dependency — it re-exports `usvg` (SVG parsing) and `tiny_skia` (rasterization) publicly (`resvg::usvg`, `resvg::tiny_skia`), so those are not separate `Cargo.toml` entries.
+- PNG icons are decoded directly by `cairo::ImageSurface::create_from_png` (`cairo-rs`'s existing `png` feature, unconditional); SVG icons are rasterized by `resvg` into a premultiplied RGBA `tiny_skia::Pixmap`, then copied into a Cairo `ImageSurface` (RGBA → BGRA byte swap, both premultiplied so no alpha conversion is needed). Both paths scale to `CardStyle::icon_size`, preserving aspect ratio and centering.
+- `render::measure_card` carries `NotificationView.icon` through as `ComputedCard::icon_ref` so `paint_computed` can resolve/rasterize without needing the original `NotificationView`; when the `icons` feature is disabled, or resolution/decoding fails, painting falls back to the existing solid rounded-rect placeholder.
 
 ### Phase 7 — Polish + first release
 

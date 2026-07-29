@@ -63,6 +63,17 @@ pub struct NotificationView {
     pub urgency: Urgency,
     pub timeout_ms: Option<u64>,
     pub has_actions: bool,
+    pub icon: Option<IconRef>,
+}
+
+/// Icon reference from a provider feed payload (`icon.name` / `icon.path`).
+///
+/// `path` (when present) is used directly; otherwise `name` is looked up as an
+/// XDG icon-theme name under `CardStyle::icon_theme`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IconRef {
+    pub name: Option<String>,
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

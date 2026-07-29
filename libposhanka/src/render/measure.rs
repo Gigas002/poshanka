@@ -1,5 +1,5 @@
 use crate::error::PoshankaError;
-use crate::model::{CardStyle, IconPos, NotificationView, TextAlign};
+use crate::model::{CardStyle, IconPos, IconRef, NotificationView, TextAlign};
 
 use super::font::FontContext;
 use super::template::apply_template;
@@ -29,6 +29,10 @@ pub struct ComputedCard {
     pub height: u32,
     pub blocks: Vec<TextBlock>,
     pub icon: Option<IconRect>,
+    /// Icon metadata from the notification, carried through so `paint_computed`
+    /// can resolve and rasterize the real icon (PNG/SVG) without needing the
+    /// original `NotificationView`.
+    pub icon_ref: Option<IconRef>,
 }
 
 pub fn measure_card(
@@ -135,6 +139,7 @@ pub fn measure_card(
         height,
         blocks,
         icon,
+        icon_ref: notification.icon.clone(),
     })
 }
 

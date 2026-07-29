@@ -13,6 +13,7 @@ fn sample_view(app_id: &str, urgency: Urgency) -> NotificationView {
         urgency,
         timeout_ms: Some(5_000),
         has_actions: false,
+        icon: None,
     }
 }
 

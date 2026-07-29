@@ -10,6 +10,7 @@ fn sample(id: u32) -> NotificationView {
         urgency: Urgency::Normal,
         timeout_ms: None,
         has_actions: false,
+        icon: None,
     }
 }
 
