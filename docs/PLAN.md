@@ -339,7 +339,7 @@ Quality gates: [ARCHITECTURE.md §6–§8](./ARCHITECTURE.md#6-testing-and-cover
 
 ## 8. Phased steps
 
-**Status (2026-07-23):** Phases **0–4** and **1b** done. **Phase 5** is next (pointer input). No upstream blockers.
+**Status (2026-07-29):** Phases **0–4**, **1b**, and **5** (implementation) done. Phase 5's manual/compositor verification is still outstanding. **Phase 6** (icons) is next. No upstream blockers.
 
 ### Phase 0 — Workspace + hygiene + empty vertical slice ✅
 
@@ -393,22 +393,28 @@ Completed: serde for `examples/**`, override merge, `Settings` → `CardStyle` (
 - `[layer].output` is parsed into `SubscriberSpec` but not yet bound to a specific `wl_output`; surfaces are created without an explicit output (compositor default). Deferred — not required by this phase's checklist.
 - Phase 0's single solid-color `OverlaySpec` overlay is removed; the card stack now always paints real notification content.
 
-### Phase 5 — Pointer input (Layer B + Layer A)
+### Phase 5 — Pointer input (Layer B + Layer A) ✅ (implementation; manual verify pending)
 
-**Upstream ready** — notred `input` RPC merged. Deliver in two slices if useful; both use `[provider].command` only.
+**Upstream ready** — notred `input` RPC merged. Delivered as one change covering both slices; both use `[provider].command` only.
 
 **5a — Whole-card shortcuts (Layer B)**
 
-- [ ] `wl_pointer` on card surfaces; single hit region per card.
-- [ ] Primary tap → `command close <id>` or `activate <id>` per `has_actions` (non-blocking spawn).
-- [ ] Surfaces removed when `id` absent from next `update`.
+- [x] `wl_pointer` on card surfaces; single hit region per card (via `wl_pointer` enter/leave focus tracking keyed on the notification `id` stored as the `wl_surface` user data).
+- [x] Primary tap (`BTN_LEFT`, on release) → `command close <id>` or `activate <id>` per `has_actions` (non-blocking spawn — dedicated `std::thread::spawn` per gesture so a slow/hung provider CLI never blocks the Wayland poll loop).
+- [x] Surfaces removed when `id` absent from next `update` (already covered by Phase 4's stale-surface diff; `pointer_focus` is also cleared on compositor-initiated `Closed`).
 
 **5b — Per-gesture `input` (Layer A)**
 
-- [ ] Map pointer button events → `command input <id> button_left|button_middle|button_right|touch`.
-- [ ] Right/middle click runs `on_button_*` from **notred** config — verify with hook in notred `examples/`.
+- [x] Map pointer button events → `command input <id> button_left|button_middle|button_right|touch` — `BTN_RIGHT`/`BTN_MIDDLE` map to `input <id> button_right|button_middle`; `wl_touch` `Down` maps to `input <id> touch`. (`button_left` stays on the Layer B shortcut per the phase's own table — not re-sent via `input`.)
+- [ ] Right/middle click runs `on_button_*` from **notred** config — verify with hook in notred `examples/` (needs a live compositor + notred).
 
-**Verify (5a):** tap dismisses; `notify-send --action` + tap → `ActionInvoked` from **notred** only.
+**Verify (5a):** tap dismisses; `notify-send --action` + tap → `ActionInvoked` from **notred** only. *(Manual, requires Wayland compositor — not run in this change.)*
+
+**Notes:**
+
+- `wl_seat` is bound optimistically; `wl_pointer`/`wl_touch` are only created once the compositor reports the corresponding capability bit in `wl_seat::Event::Capabilities` — no pointer/touch device is assumed.
+- Button-release (not press) triggers the gesture, matching common click semantics and avoiding double-firing on press+release.
+- `libposhanka::wayland::run_overlay` now takes a `ProviderSpec` (already resolved by `poshanka::app::run`/`SubscriberRun`) so click/touch handlers can spawn `[provider].command` without re-deriving it from `SubscriberSpec`.
 
 **Verify (5b):** `on_button_right` hook in notred config fires on right-click; poshanka config unchanged.
 

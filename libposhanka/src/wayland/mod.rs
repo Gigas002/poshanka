@@ -16,9 +16,10 @@ use std::sync::mpsc;
 use rustix::event::{PollFd, PollFlags, poll};
 use tracing::{debug, info, warn};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+    wl_touch,
 };
-use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
     zwlr_layer_surface_v1::{self, KeyboardInteractivity, ZwlrLayerSurfaceV1},
@@ -31,9 +32,14 @@ use anchor::Corner;
 use stack::stack_offsets;
 
 use crate::error::PoshankaError;
-use crate::feed::{FeedSignal, NotificationState};
+use crate::feed::{self, FeedSignal, NotificationState, ProviderSpec};
 use crate::model::{CardStyle, NotificationView, SubscriberSpec};
 use crate::render::{FontContext, Frame, paint_card};
+
+/// Linux input event codes for pointer buttons (`linux/input-event-codes.h`).
+const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
+const BTN_MIDDLE: u32 = 0x112;
 
 /// Resolves the effective [`CardStyle`] for a notification, and reacts to a
 /// provider `reload` event by re-reading whatever config/theme backs it.
@@ -65,6 +71,7 @@ pub fn run_overlay(
     initial: Vec<NotificationView>,
     feed: Option<FeedHandle>,
     style_source: Box<dyn StyleSource>,
+    provider: ProviderSpec,
 ) -> Result<(), PoshankaError> {
     let conn = Connection::connect_to_env()?;
     let display = conn.display();
@@ -85,10 +92,15 @@ pub fn run_overlay(
         notifications,
         feed,
         style_source,
+        provider,
         dirty: true,
         compositor: None,
         shm: None,
         layer_shell: None,
+        seat: None,
+        pointer: None,
+        touch: None,
+        pointer_focus: None,
         surfaces: HashMap::new(),
     };
 
@@ -165,12 +177,20 @@ struct AppState {
     notifications: NotificationState,
     feed: Option<FeedHandle>,
     style_source: Box<dyn StyleSource>,
+    /// `[provider].command` wiring used to fire non-blocking `close` /
+    /// `activate` / `input` calls in response to pointer and touch gestures.
+    provider: ProviderSpec,
     /// Set whenever the notification list (or, on reload, its styling) may
     /// have changed and the surface stack needs re-syncing.
     dirty: bool,
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     layer_shell: Option<ZwlrLayerShellV1>,
+    seat: Option<wl_seat::WlSeat>,
+    pointer: Option<wl_pointer::WlPointer>,
+    touch: Option<wl_touch::WlTouch>,
+    /// Notification `id` of the card currently under the pointer, if any.
+    pointer_focus: Option<u32>,
     surfaces: HashMap<u32, CardSurface>,
 }
 
@@ -397,7 +417,65 @@ impl AppState {
     fn on_closed(&mut self, id: u32) {
         debug!(id, "layer surface closed by compositor");
         self.surfaces.remove(&id);
+        if self.pointer_focus == Some(id) {
+            self.pointer_focus = None;
+        }
     }
+
+    /// Layer B — whole-card shortcut for a primary-button click: `activate`
+    /// when the notification advertises actions, otherwise `close`.
+    fn handle_pointer_click(&self, id: u32, button: u32) {
+        match button {
+            BTN_LEFT => {
+                let has_actions = self
+                    .notifications
+                    .items()
+                    .iter()
+                    .any(|item| item.id == id && item.has_actions);
+                if has_actions {
+                    self.spawn_provider_command(ProviderAction::Activate(id));
+                } else {
+                    self.spawn_provider_command(ProviderAction::Close(id));
+                }
+            }
+            BTN_RIGHT => self.spawn_provider_command(ProviderAction::Input(id, "button_right")),
+            BTN_MIDDLE => self.spawn_provider_command(ProviderAction::Input(id, "button_middle")),
+            _ => {}
+        }
+    }
+
+    /// Layer A — report a touch tap as a generic `input` gesture; notred
+    /// resolves `on_touch` (or default policy) from its own config.
+    fn handle_touch_down(&self, id: u32) {
+        self.spawn_provider_command(ProviderAction::Input(id, "touch"));
+    }
+
+    /// Fire a `[provider].command` mutation on a dedicated thread so a slow
+    /// or hung provider CLI never blocks the Wayland poll loop.
+    fn spawn_provider_command(&self, action: ProviderAction) {
+        let provider = self.provider.clone();
+        std::thread::spawn(move || {
+            let (id, result) = match action {
+                ProviderAction::Close(id) => (id, feed::close(&provider, id)),
+                ProviderAction::Activate(id) => (id, feed::activate(&provider, id, None)),
+                ProviderAction::Input(id, kind) => (id, feed::input(&provider, id, kind)),
+            };
+            if let Err(err) = result {
+                warn!(id, %err, "provider command failed");
+            }
+        });
+    }
+}
+
+/// A gesture-triggered `[provider].command` mutation, dispatched off the
+/// Wayland thread by [`AppState::spawn_provider_command`].
+enum ProviderAction {
+    /// Layer B whole-card shortcut: dismiss a notification without actions.
+    Close(u32),
+    /// Layer B whole-card shortcut: run the default action.
+    Activate(u32),
+    /// Layer A gesture report: `button_left` | `button_middle` | `button_right` | `touch`.
+    Input(u32, &'static str),
 }
 
 impl CardSurface {
@@ -536,7 +614,89 @@ impl Dispatch<wl_registry::WlRegistry, ()> for AppState {
                 state.layer_shell = Some(shell);
                 state.try_sync_stack(qh);
             }
+            "wl_seat" => {
+                let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, 7.min(version), qh, ());
+                state.seat = Some(seat);
+            }
             _ => {}
+        }
+    }
+}
+
+impl Dispatch<wl_seat::WlSeat, ()> for AppState {
+    fn event(
+        state: &mut Self,
+        seat: &wl_seat::WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        let wl_seat::Event::Capabilities { capabilities } = event else {
+            return;
+        };
+        let Ok(capabilities) = capabilities.into_result() else {
+            return;
+        };
+
+        if capabilities.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
+            state.pointer = Some(seat.get_pointer(qh, ()));
+        }
+        if capabilities.contains(wl_seat::Capability::Touch) && state.touch.is_none() {
+            state.touch = Some(seat.get_touch(qh, ()));
+        }
+    }
+}
+
+impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
+    fn event(
+        state: &mut Self,
+        _pointer: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_pointer::Event::Enter { surface, .. } => {
+                state.pointer_focus = surface.data::<u32>().copied();
+            }
+            wl_pointer::Event::Leave { .. } => {
+                state.pointer_focus = None;
+            }
+            wl_pointer::Event::Button {
+                button,
+                state: button_state,
+                ..
+            } => {
+                let Ok(button_state) = button_state.into_result() else {
+                    return;
+                };
+                if button_state != wl_pointer::ButtonState::Released {
+                    return;
+                }
+                if let Some(id) = state.pointer_focus {
+                    state.handle_pointer_click(id, button);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<wl_touch::WlTouch, ()> for AppState {
+    fn event(
+        state: &mut Self,
+        _touch: &wl_touch::WlTouch,
+        event: wl_touch::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_touch::Event::Down { surface, .. } = event
+            && let Some(id) = surface.data::<u32>().copied()
+        {
+            state.handle_touch_down(id);
         }
     }
 }

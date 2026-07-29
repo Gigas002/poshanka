@@ -47,5 +47,5 @@ pub fn run(run: SubscriberRun) -> Result<(), PoshankaError> {
         None
     };
 
-    run_overlay(run.stack, initial, feed, run.style_source)
+    run_overlay(run.stack, initial, feed, run.style_source, run.provider)
 }
