@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Reference provider feed script for notred — reconnect loop like abar tray.sh.
 # Point poshanka [provider].exec at this script (or any script with the same NDJSON contract).
 set -euo pipefail
 
