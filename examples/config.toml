@@ -26,4 +26,5 @@ margin = 0
 [layer]
 # background, bottom, top, overlay
 layer = "overlay"
+# wl_output name to restrict the stack to (e.g. "DP-1"); empty = every connected output
 output = ""
