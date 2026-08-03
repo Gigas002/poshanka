@@ -37,6 +37,15 @@ pub fn run(run: SubscriberRun) -> Result<(), PoshankaError> {
             path: std::path::PathBuf::from("wakeup-socketpair"),
             source,
         })?;
+        // `drain_wakeup` drains this side in a loop until empty; it must be
+        // non-blocking or the last read on each cycle blocks forever waiting
+        // for a byte that may never come, stalling the whole event loop.
+        wakeup_rx
+            .set_nonblocking(true)
+            .map_err(|source| PoshankaError::Io {
+                path: std::path::PathBuf::from("wakeup-socketpair"),
+                source,
+            })?;
         let (tx, rx) = mpsc::sync_channel::<FeedSignal>(64);
         let _feed_thread = spawn_feed_exec(exec, tx, wakeup_tx);
         Some(FeedHandle {

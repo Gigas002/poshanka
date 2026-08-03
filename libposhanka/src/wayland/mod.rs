@@ -144,9 +144,17 @@ pub fn run_overlay(
             }
         }
 
-        read_guard
-            .read()
-            .map_err(|e| PoshankaError::WaylandProtocol(format!("read failed: {e}")))?;
+        // `poll` may have woken us for the feed's wakeup fd alone, with nothing
+        // to read on the Wayland socket; `read` reports that as `WouldBlock`,
+        // not a protocol failure, since we only prepared the read speculatively.
+        match read_guard.read() {
+            Ok(_) => {}
+            Err(wayland_client::backend::WaylandError::Io(e))
+                if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) => {
+                return Err(PoshankaError::WaylandProtocol(format!("read failed: {e}")));
+            }
+        }
 
         event_queue
             .dispatch_pending(&mut state)

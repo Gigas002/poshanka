@@ -61,7 +61,9 @@ pub struct NotificationView {
     pub summary: String,
     pub body: String,
     pub urgency: Urgency,
-    pub timeout_ms: Option<u64>,
+    /// Freedesktop `expire_timeout` semantics: `-1` = server default, `0` = never
+    /// expire, `>0` = milliseconds. `None` when the provider omits the field.
+    pub timeout_ms: Option<i32>,
     pub has_actions: bool,
     pub icon: Option<IconRef>,
 }

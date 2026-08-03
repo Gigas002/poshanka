@@ -106,7 +106,7 @@ pub(crate) struct RawNotification {
     #[serde(default)]
     body: String,
     urgency: String,
-    timeout_ms: Option<u64>,
+    timeout_ms: Option<i32>,
     #[serde(default)]
     has_actions: bool,
     #[serde(default)]
