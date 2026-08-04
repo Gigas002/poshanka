@@ -1,0 +1,30 @@
+# Example systemd user unit for poshanka.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp examples/poshanka.service ~/.config/systemd/user/poshanka.service
+#   # Edit ExecStart if `poshanka` is not on your PATH.
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now poshanka.service
+#
+# Requires a running Wayland compositor and notred (see notred's own
+# examples/notred.service) — poshanka shows no cards until notred is up,
+# but keeps retrying its subscribe connection meanwhile.
+#
+# Logs: journalctl --user -u poshanka.service -f
+
+[Unit]
+Description=Wayland popup notification subscriber (poshanka)
+Documentation=https://github.com/Gigas002/poshanka
+After=graphical-session.target notred.service
+Wants=notred.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=poshanka
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
