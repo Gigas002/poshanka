@@ -45,19 +45,23 @@ pub fn measure_card(
     let border = f64::from(style.border_size);
     let padding = f64::from(style.padding);
     let inner_w = f64::from(width) - 2.0 * (border + padding);
-    let inner_h = max_height - 2.0 * (border + padding);
+    let max_inner_h = max_height - 2.0 * (border + padding);
+    let origin = border + padding;
 
     let icon_size = f64::from(style.icon_size.max(0));
     let reserve_icon = icon_size > 0.0;
 
-    let (text_x, text_y, text_w, text_h, icon) = text_region(
+    // Uses the theme's *maximum* height as a generous ceiling for text
+    // wrapping only; icon placement and text centering are re-anchored below
+    // once the card's actual (shrink-to-fit) height is known.
+    let (text_x, text_y, text_w, text_h, mut icon) = text_region(
         style,
         inner_w,
-        inner_h,
+        max_inner_h,
         icon_size,
         reserve_icon,
-        border + padding,
-        border + padding,
+        origin,
+        origin,
     );
 
     let mut blocks = Vec::new();
@@ -131,8 +135,43 @@ pub fn measure_card(
         _ => text_stack_h,
     };
 
-    let natural_h = (2.0 * (border + padding) + content_h).round() as u32;
+    let natural_h = (2.0 * origin + content_h).round() as u32;
     let height = natural_h.min(style.height).max(1);
+    let final_inner_h = (f64::from(height) - 2.0 * origin).max(0.0);
+
+    // Text region's own vertical span: excludes icon + gap for Top/Bottom,
+    // since those stack the icon and text along the same axis.
+    let text_region_h = match style.icon_position {
+        IconPos::Top | IconPos::Bottom if reserve_icon => {
+            (final_inner_h - icon_size - ICON_GAP).max(0.0)
+        }
+        _ => final_inner_h,
+    };
+
+    // Vertically center the text stack within its region; horizontal
+    // alignment is unaffected (still driven by `style.text_alignment`).
+    let text_offset = ((text_region_h - text_stack_h) / 2.0).max(0.0);
+    if text_offset > 0.0 {
+        for block in &mut blocks {
+            block.y += text_offset;
+        }
+    }
+
+    // Re-anchor the icon to the card's actual height, not the theme's
+    // configured maximum — `text_region` above only had the max height to
+    // work with, which would otherwise center/place the icon far below the
+    // real (shrink-to-fit) card bounds.
+    if let Some(icon_rect) = icon.as_mut() {
+        match style.icon_position {
+            IconPos::Left | IconPos::Right => {
+                icon_rect.y = origin + ((final_inner_h - icon_size) / 2.0).max(0.0);
+            }
+            IconPos::Bottom => {
+                icon_rect.y = origin + text_region_h + ICON_GAP;
+            }
+            IconPos::Top => {}
+        }
+    }
 
     Ok(ComputedCard {
         width,

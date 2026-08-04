@@ -76,9 +76,21 @@ fn painted_card_has_background_pixel() {
     let style = test_style();
     let notification = test_notification();
     let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
     let frame = paint_card(&style, &notification, &font).expect("paint");
 
-    let px = pixel_bgra(&frame.data, frame.stride, 20, 20);
+    // Sample just below both the icon and the text stack (whichever extends
+    // further), inside the bottom padding band and above the border stroke —
+    // background regardless of exactly how tall the icon/text content is.
+    let content_bottom = computed
+        .icon
+        .as_ref()
+        .map(|icon| icon.y + icon.size)
+        .into_iter()
+        .chain(computed.blocks.iter().map(|b| b.y + b.height))
+        .fold(0.0_f64, f64::max);
+    let y = ((content_bottom + 2.0) as u32).min(frame.height.saturating_sub(3));
+    let px = pixel_bgra(&frame.data, frame.stride, 20, y);
     assert_eq!(px, style.background_bgra);
 }
 
@@ -101,6 +113,50 @@ fn painted_card_has_foreground_text_pixel() {
     );
     assert_ne!(px, style.background_bgra);
     assert_eq!(px[3], 0xff);
+}
+
+#[test]
+fn icon_stays_within_card_bounds_when_shorter_than_icon() {
+    // Reproduces the reported bug: a large icon (relative to a tall
+    // configured max-height) combined with short text used to center the
+    // icon against the *max* height instead of the actual shrink-to-fit
+    // height, pushing it below the real card bounds.
+    let mut style = test_style();
+    style.height = 300;
+    style.icon_size = 128;
+    let mut notification = test_notification();
+    notification.body = "Short.".into();
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+
+    let icon = computed.icon.expect("icon rect");
+    assert!(
+        icon.y + icon.size <= f64::from(computed.height),
+        "icon (y={}, size={}) extends past card height {}",
+        icon.y,
+        icon.size,
+        computed.height
+    );
+    assert!(icon.y >= 0.0);
+}
+
+#[test]
+fn text_stack_centers_vertically_when_icon_taller_than_text() {
+    let mut style = test_style();
+    style.height = 300;
+    style.icon_size = 128;
+    let mut notification = test_notification();
+    notification.body = "Short.".into();
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+
+    let origin = f64::from(style.border_size + style.padding);
+    let first_block_y = computed.blocks[0].y;
+    assert!(
+        first_block_y > origin,
+        "text block should be pushed down from the top edge to center within \
+         the icon-driven card height, got y={first_block_y} (origin={origin})"
+    );
 }
 
 #[test]

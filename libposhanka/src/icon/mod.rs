@@ -1,9 +1,12 @@
-//! Icon resolution and rasterization: `icon.name` / `icon.path` → Cairo surface.
+//! Icon resolution and rasterization: `icon.name` / `icon.path` / raw pixel
+//! data → Cairo surface.
 //!
-//! Resolution order:
-//! 1. `icon.path` — used directly if it points at an existing file (PNG or SVG,
+//! Resolution order (see [`crate::render::paint`]):
+//! 1. `icon.raw` — decoded directly from the embedded pixel buffer (FDN
+//!    `image-data` hint; e.g. chat app avatars with no theme name or file).
+//! 2. `icon.path` — used directly if it points at an existing file (PNG or SVG,
 //!    detected by extension).
-//! 2. `icon.name` — looked up as an XDG icon-theme name under
+//! 3. `icon.name` — looked up as an XDG icon-theme name under
 //!    `CardStyle::icon_theme` (a theme name, or an absolute path to a theme
 //!    root), falling back to the `hicolor` theme and finally the flat
 //!    `/usr/share/pixmaps` directory.
@@ -13,13 +16,16 @@
 //!   scaled to the target size if needed.
 //! - SVG is parsed and rasterized by `resvg` (pure-Rust, actively maintained)
 //!   into a premultiplied RGBA buffer, then copied into a Cairo `ImageSurface`.
+//! - Raw pixel data (straight, non-premultiplied alpha, row length
+//!   `rowstride` which may exceed `width * channels`) is premultiplied and
+//!   copied into a Cairo `ImageSurface`, then scaled to the target size.
 
 use std::path::{Path, PathBuf};
 
 use cairo::{Context, Format, ImageSurface};
 
 use crate::error::PoshankaError;
-use crate::model::IconRef;
+use crate::model::{IconRef, RawIconData};
 
 /// Icon-theme subdirectory "contexts" searched, in priority order, per size.
 const CONTEXTS: [&str; 6] = [
@@ -38,8 +44,9 @@ const SIZES: [u32; 7] = [256, 128, 96, 64, 48, 32, 24];
 /// Resolve an [`IconRef`] to a concrete icon file path on disk.
 ///
 /// `icon_theme` is `CardStyle::icon_theme`: an XDG icon theme name (e.g.
-/// `"Adwaita"`), an absolute path to a theme root, or empty to disable
-/// name-based lookups (only `icon.path` will resolve).
+/// `"Adwaita"`), an absolute path to a theme root, or empty to defer to the
+/// desktop's `$XDG_ICON_THEME` (falling back further to `hicolor` /
+/// `/usr/share/pixmaps` if that's unset too).
 pub fn resolve_icon_path(icon: &IconRef, icon_theme: &str) -> Option<PathBuf> {
     if let Some(path) = &icon.path {
         let candidate = PathBuf::from(path);
@@ -77,15 +84,25 @@ pub fn resolve_icon_path(icon: &IconRef, icon_theme: &str) -> Option<PathBuf> {
 fn theme_roots(icon_theme: &str) -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
-    if icon_theme.starts_with('/') {
-        roots.push(PathBuf::from(icon_theme));
-    } else if !icon_theme.is_empty() {
+    // An empty config value defers to the desktop's own icon theme choice,
+    // same as `XDG_DATA_DIRS` below.
+    let env_fallback;
+    let effective_theme = if icon_theme.is_empty() {
+        env_fallback = std::env::var("XDG_ICON_THEME").unwrap_or_default();
+        env_fallback.as_str()
+    } else {
+        icon_theme
+    };
+
+    if effective_theme.starts_with('/') {
+        roots.push(PathBuf::from(effective_theme));
+    } else if !effective_theme.is_empty() {
         for base in data_dirs() {
-            roots.push(base.join("icons").join(icon_theme));
+            roots.push(base.join("icons").join(effective_theme));
         }
     }
 
-    if icon_theme != "hicolor" {
+    if effective_theme != "hicolor" {
         for base in data_dirs() {
             roots.push(base.join("icons").join("hicolor"));
         }
@@ -109,17 +126,43 @@ fn data_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Size subdirectory names to try, largest/most-scalable first. Most themes
+/// follow the XDG hicolor convention (`48x48`); some (Papirus, candy-icons,
+/// Sweet-Rainbow, …) use a bare number (`48`) instead.
+fn size_dir_names() -> Vec<String> {
+    let mut names: Vec<String> = vec!["scalable".to_string()];
+    for size in SIZES {
+        names.push(format!("{size}x{size}"));
+        names.push(size.to_string());
+    }
+    names
+}
+
 fn find_in_theme_root(root: &Path, name: &str) -> Option<PathBuf> {
     if !root.is_dir() {
         return None;
     }
 
-    let mut size_dirs: Vec<String> = vec!["scalable".to_string()];
-    size_dirs.extend(SIZES.iter().map(|s| format!("{s}x{s}")));
+    let size_dirs = size_dir_names();
 
+    // Try both `<size>/<context>` (XDG hicolor convention) and
+    // `<context>/<size>` (Papirus-style themes, e.g. candy-icons,
+    // Sweet-Rainbow) since real-world themes disagree on the order.
     for size_dir in &size_dirs {
         for context in CONTEXTS {
             let dir = root.join(size_dir).join(context);
+            for ext in ["svg", "png"] {
+                let candidate = dir.join(format!("{name}.{ext}"));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    for context in CONTEXTS {
+        for size_dir in &size_dirs {
+            let dir = root.join(context).join(size_dir);
             for ext in ["svg", "png"] {
                 let candidate = dir.join(format!("{name}.{ext}"));
                 if candidate.is_file() {
@@ -146,6 +189,71 @@ pub fn load_icon_surface(path: &Path, size: u32) -> Result<ImageSurface, Poshank
     } else {
         load_raster_surface(path, size)
     }
+}
+
+/// Decode raw FDN `image-data` pixel bytes (straight alpha, RGB(A), rowstride
+/// possibly padded beyond `width * channels`) into a square Cairo
+/// `ImageSurface` of `size` × `size` pixels, preserving aspect ratio and
+/// centering the result.
+pub fn load_icon_surface_from_raw(
+    raw: &RawIconData,
+    size: u32,
+) -> Result<ImageSurface, PoshankaError> {
+    if raw.width <= 0 || raw.height <= 0 {
+        return Err(PoshankaError::Render("invalid raw icon dimensions".into()));
+    }
+    let data = base64_ng::decode(&raw.data_base64)
+        .map_err(|e| PoshankaError::Render(format!("raw icon base64: {e}")))?;
+
+    let source = raw_pixels_to_argb_surface(raw, &data)?;
+    let (src_w, src_h) = (source.width(), source.height());
+    if src_w == size as i32 && src_h == size as i32 {
+        return Ok(source);
+    }
+    scale_surface(&source, src_w, src_h, size)
+}
+
+/// Convert straight-alpha, row-padded RGB(A) pixel bytes (FDN `image-data`
+/// shape) into a premultiplied Cairo `Format::ARgb32` surface.
+fn raw_pixels_to_argb_surface(
+    raw: &RawIconData,
+    data: &[u8],
+) -> Result<ImageSurface, PoshankaError> {
+    let (width, height) = (raw.width, raw.height);
+    let channels = raw.channels.max(1) as usize;
+    let rowstride = raw.rowstride.max(0) as usize;
+    let has_alpha = raw.has_alpha && channels >= 4;
+
+    let mut surface = ImageSurface::create(Format::ARgb32, width, height)
+        .map_err(|e| PoshankaError::Render(format!("icon surface: {e}")))?;
+    let stride = surface.stride() as usize;
+
+    {
+        let mut dst = surface
+            .data()
+            .map_err(|e| PoshankaError::Render(format!("icon surface data: {e}")))?;
+        for y in 0..height as usize {
+            let src_row = y * rowstride;
+            let dst_row = y * stride;
+            for x in 0..width as usize {
+                let src_px = src_row + x * channels;
+                if src_px + channels > data.len() {
+                    continue; // truncated/malformed row; leave transparent
+                }
+                let (r, g, b) = (data[src_px], data[src_px + 1], data[src_px + 2]);
+                let a = if has_alpha { data[src_px + 3] } else { 255 };
+                let premultiply = |c: u8| (u16::from(c) * u16::from(a) / 255) as u8;
+
+                let dst_px = dst_row + x * 4;
+                dst[dst_px] = premultiply(b);
+                dst[dst_px + 1] = premultiply(g);
+                dst[dst_px + 2] = premultiply(r);
+                dst[dst_px + 3] = a;
+            }
+        }
+    }
+
+    Ok(surface)
 }
 
 fn load_raster_surface(path: &Path, size: u32) -> Result<ImageSurface, PoshankaError> {

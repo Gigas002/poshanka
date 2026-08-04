@@ -15,9 +15,10 @@ pub use feed::{
     ProviderSpec, activate, close, fetch_list, input, parse_line, run_command, spawn_feed_exec,
 };
 #[cfg(feature = "icons")]
-pub use icon::{load_icon_surface, resolve_icon_path};
+pub use icon::{load_icon_surface, load_icon_surface_from_raw, resolve_icon_path};
 pub use model::{
-    CardStyle, IconPos, IconRef, NotificationView, ProgressMode, SubscriberSpec, TextAlign, Urgency,
+    CardStyle, IconPos, IconRef, NotificationView, ProgressMode, RawIconData, SubscriberSpec,
+    TextAlign, Urgency,
 };
 pub use render::{ComputedCard, FontContext, Frame, measure_card, paint_card};
 pub use subscriber::{SubscriberRun, run as run_subscriber};

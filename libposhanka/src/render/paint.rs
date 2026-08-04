@@ -126,23 +126,42 @@ fn paint_icon(
     icon: &super::measure::IconRect,
     icon_ref: Option<&crate::model::IconRef>,
 ) -> Result<(), PoshankaError> {
+    let target_size = icon.size.round().max(1.0) as u32;
+
+    // Raw embedded pixel data (chat app avatars, …) takes precedence — it
+    // needs no filesystem lookup and is the only option those senders give us.
+    if let Some(surface) = icon_ref
+        .and_then(|r| r.raw.as_ref())
+        .and_then(|raw| crate::icon::load_icon_surface_from_raw(raw, target_size).ok())
+    {
+        return paint_icon_surface(cr, icon, &surface);
+    }
+
     if let Some(icon_ref) = icon_ref
         && let Some(path) = crate::icon::resolve_icon_path(icon_ref, &style.icon_theme)
-        && let Ok(surface) =
-            crate::icon::load_icon_surface(&path, icon.size.round().max(1.0) as u32)
+        && let Ok(surface) = crate::icon::load_icon_surface(&path, target_size)
     {
-        cr.save()
-            .map_err(|e| PoshankaError::Render(format!("icon save: {e}")))?;
-        cr.translate(icon.x, icon.y);
-        cr.set_source_surface(&surface, 0.0, 0.0)
-            .map_err(|e| PoshankaError::Render(format!("icon source: {e}")))?;
-        cr.paint()
-            .map_err(|e| PoshankaError::Render(format!("icon paint: {e}")))?;
-        cr.restore()
-            .map_err(|e| PoshankaError::Render(format!("icon restore: {e}")))?;
-        return Ok(());
+        return paint_icon_surface(cr, icon, &surface);
     }
     paint_icon_placeholder(cr, style, icon)
+}
+
+#[cfg(feature = "icons")]
+fn paint_icon_surface(
+    cr: &Context,
+    icon: &super::measure::IconRect,
+    surface: &cairo::ImageSurface,
+) -> Result<(), PoshankaError> {
+    cr.save()
+        .map_err(|e| PoshankaError::Render(format!("icon save: {e}")))?;
+    cr.translate(icon.x, icon.y);
+    cr.set_source_surface(surface, 0.0, 0.0)
+        .map_err(|e| PoshankaError::Render(format!("icon source: {e}")))?;
+    cr.paint()
+        .map_err(|e| PoshankaError::Render(format!("icon paint: {e}")))?;
+    cr.restore()
+        .map_err(|e| PoshankaError::Render(format!("icon restore: {e}")))?;
+    Ok(())
 }
 
 fn paint_icon_placeholder(

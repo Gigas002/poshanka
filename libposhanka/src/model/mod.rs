@@ -68,14 +68,32 @@ pub struct NotificationView {
     pub icon: Option<IconRef>,
 }
 
-/// Icon reference from a provider feed payload (`icon.name` / `icon.path`).
+/// Icon reference from a provider feed payload (`icon.name` / `icon.path` /
+/// raw pixel data).
 ///
-/// `path` (when present) is used directly; otherwise `name` is looked up as an
-/// XDG icon-theme name under `CardStyle::icon_theme`.
+/// `raw` (when present) is used directly; otherwise `path` is used directly;
+/// otherwise `name` is looked up as an XDG icon-theme name under
+/// `CardStyle::icon_theme`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IconRef {
     pub name: Option<String>,
     pub path: Option<String>,
+    pub raw: Option<RawIconData>,
+}
+
+/// Raw pixel buffer from the FDN `image-data` hint (notred wire `IconRef::Raw`)
+/// — used by senders (chat app avatars, etc.) with no icon-theme name or
+/// on-disk file. `data_base64` is decoded lazily at render time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawIconData {
+    pub width: i32,
+    pub height: i32,
+    /// Bytes per row, including any padding (may exceed `width * channels`).
+    pub rowstride: i32,
+    pub has_alpha: bool,
+    pub bits_per_sample: i32,
+    pub channels: i32,
+    pub data_base64: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

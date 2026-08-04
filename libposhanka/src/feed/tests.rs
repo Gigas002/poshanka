@@ -4,6 +4,22 @@ use std::path::Path;
 use super::{FeedEvent, FeedMessage, parse_line};
 use crate::model::{NotificationView, Urgency};
 
+#[test]
+fn parses_raw_icon_shape() {
+    let line = r#"{"v":1,"type":"items","items":[{"id":1,"app_id":"telegram","summary":"Hi","body":"","urgency":"normal","timeout_ms":-1,"has_actions":false,"icon":{"width":2,"height":1,"rowstride":8,"has_alpha":true,"bits_per_sample":8,"channels":4,"data":"AAAAAA=="}}]}"#;
+    let FeedMessage::Items(items) = parse_line(line).unwrap().unwrap() else {
+        panic!("expected items response");
+    };
+    let raw = items[0].icon.as_ref().and_then(|i| i.raw.as_ref());
+    let raw = raw.expect("icon.raw should be populated");
+    assert_eq!(raw.width, 2);
+    assert_eq!(raw.height, 1);
+    assert_eq!(raw.rowstride, 8);
+    assert!(raw.has_alpha);
+    assert_eq!(raw.channels, 4);
+    assert_eq!(raw.data_base64, "AAAAAA==");
+}
+
 fn fixtures_dir() -> std::path::PathBuf {
     Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),

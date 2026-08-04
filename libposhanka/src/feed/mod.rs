@@ -6,7 +6,7 @@ mod state;
 
 use serde::Deserialize;
 
-use crate::model::{IconRef, NotificationView, Urgency};
+use crate::model::{IconRef, NotificationView, RawIconData, Urgency};
 
 pub use command::{CommandError, activate, close, input, run_command};
 pub use exec::{fetch_list, spawn_feed_exec};
@@ -119,13 +119,56 @@ pub(crate) struct RawIcon {
     name: Option<String>,
     #[serde(default)]
     path: Option<String>,
+    #[serde(default)]
+    width: Option<i32>,
+    #[serde(default)]
+    height: Option<i32>,
+    #[serde(default)]
+    rowstride: Option<i32>,
+    #[serde(default)]
+    has_alpha: Option<bool>,
+    #[serde(default)]
+    bits_per_sample: Option<i32>,
+    #[serde(default)]
+    channels: Option<i32>,
+    #[serde(default)]
+    data: Option<String>,
 }
 
 impl From<RawIcon> for IconRef {
     fn from(raw: RawIcon) -> Self {
+        let raw_data = match (
+            raw.width,
+            raw.height,
+            raw.rowstride,
+            raw.has_alpha,
+            raw.bits_per_sample,
+            raw.channels,
+            raw.data,
+        ) {
+            (
+                Some(width),
+                Some(height),
+                Some(rowstride),
+                Some(has_alpha),
+                Some(bits_per_sample),
+                Some(channels),
+                Some(data_base64),
+            ) => Some(RawIconData {
+                width,
+                height,
+                rowstride,
+                has_alpha,
+                bits_per_sample,
+                channels,
+                data_base64,
+            }),
+            _ => None,
+        };
         Self {
             name: raw.name,
             path: raw.path,
+            raw: raw_data,
         }
     }
 }

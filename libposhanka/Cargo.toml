@@ -9,9 +9,10 @@ description = "Wayland popup subscriber runtime — render, surfaces, provider f
 
 [features]
 default = []
-icons = ["dep:resvg"]
+icons = ["dep:resvg", "dep:base64-ng"]
 
 [dependencies]
+base64-ng = { version = "1", optional = true }
 cairo-rs = { version = "0.22", default-features = false, features = ["png"] }
 pango = { version = "0.22", features = ["v1_42"] }
 pangocairo = "0.22"
