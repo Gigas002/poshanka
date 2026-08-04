@@ -1,7 +1,7 @@
 //! Icon resolution and rasterization: `icon.name` / `icon.path` / raw pixel
 //! data → Cairo surface.
 //!
-//! Resolution order (see [`crate::render::paint`]):
+//! Resolution order (see [`crate::render::paint_card`]):
 //! 1. `icon.raw` — decoded directly from the embedded pixel buffer (FDN
 //!    `image-data` hint; e.g. chat app avatars with no theme name or file).
 //! 2. `icon.path` — used directly if it points at an existing file (PNG or SVG,
