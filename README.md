@@ -1,26 +1,23 @@
 # poshanka
 
-Wayland popup subscriber for [notred](https://github.com/Gigas002/notred) — paints corner notification cards from `notredctl` state.
+Wayland popup subscriber
 
-**poshanka does not own `org.freedesktop.Notifications`.** [notred](https://github.com/Gigas002/notred) is the session host (FDN, queue, timeouts, `[events]`). poshanka is an external subscriber that renders cards and forwards user input via **`notredctl`** only.
+![](examples/preview.png)
 
-## Two-process setup
+## Requirements
 
-Run both processes in your graphical session:
+- A Wayland compositor with `wlr-layer-shell-unstable-v1`
+- [notred](https://github.com/Gigas002/notred) or similar FDN daemon poshanka subscribes to, with its `notredctl` connector CLI on `$PATH`
+- `libcairo2` / `libpango-1.0`
 
-1. **`notred`** — notification daemon (FDN + queue). Install and configure from the [notred](https://github.com/Gigas002/notred) repo (`$XDG_CONFIG_HOME/notred/notred.toml`).
-2. **`poshanka`** — Wayland layer-shell subscriber. Reads `$XDG_CONFIG_HOME/poshanka/config.toml` and theme files; subscribes to notification state via `notredctl`.
+## Configuration
 
-Control plane for operators: **`notredctl`** (`list`, `close`, `activate`, `reload`, …) — there is no poshanka-specific ctl binary.
+poshanka reads config from `$XDG_CONFIG_HOME/poshanka/` (falls back to `~/.config/poshanka/` if `$XDG_CONFIG_HOME` is unset), or from `--config <path>`:
 
-## Development
+| File               | Role                                                                          |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `config.toml`      | Placement, stack gap, layer-shell anchor/layer, `[provider]` wiring           |
+| `theme.toml`       | Card look — font, colors, layout, Pango templates (path from `[paths].theme`) |
+| override fragments | Per-app / per-urgency theme patches (paths from `[paths].overrides`)          |
 
-```sh
-cargo build --workspace
-cargo test --workspace
-
-# Run against example config (requires Wayland + layer-shell compositor + notred running):
-poshanka --config examples/config.toml
-```
-
-Example subscribe wrapper (abar `tray.sh` pattern): `examples/scripts/notred-subscribe.sh`.
+Start from the reference files under `examples/`: copy `examples/config.toml`, `examples/theme.toml`, and (optionally) `examples/apps/`, `examples/urgency/`, and `examples/scripts/notred-subscribe.sh` into `$XDG_CONFIG_HOME/poshanka/`, adjusting `[provider].exec` if you relocate the subscribe script.
