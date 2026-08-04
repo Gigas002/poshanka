@@ -3,10 +3,10 @@ use std::path::Path;
 use libposhanka::{ProgressMode, TextAlign};
 
 use super::{
-    Settings, apply_layers, card_style_from_theme, load_overrides, resolve_events, resolve_layers,
+    LoadedOverride, Settings, apply_layers, card_style_from_theme, load_overrides, resolve_layers,
 };
-use crate::config::{Config, OverrideType, UrgencyLevel};
-use crate::theme::Theme;
+use crate::config::{Config, FragmentConfig, OverrideType, UrgencyLevel};
+use crate::theme::{FragmentTheme, Theme};
 
 fn examples_dir() -> std::path::PathBuf {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../examples")).to_path_buf()
@@ -20,26 +20,21 @@ fn load_examples() -> (Config, std::path::PathBuf, Theme) {
     (config, config_path, theme)
 }
 
-// ── Settings::resolve — DaemonSpec ───────────────────────────────────────────
+// ── Settings::resolve — SubscriberSpec ─────────────────────────────────────────
 
 #[test]
-fn resolve_daemon_spec_from_examples() {
+fn resolve_subscriber_spec_from_examples() {
     let (config, _, theme) = load_examples();
     let settings = Settings::resolve(&config, &theme).unwrap();
-    let d = &settings.daemon;
-    assert_eq!(d.stack_max, 5);
-    assert_eq!(d.anchor, "bottom-right");
-    assert_eq!(d.gap, 10);
-    assert_eq!(d.margin, 0);
-    assert!(d.queue_history);
-    assert_eq!(d.queue_sort, "time");
-    assert_eq!(d.queue_order, "desc");
-    assert!(!d.timeout_ignore);
-    assert_eq!(d.timeout_low_ms, 5000);
-    assert_eq!(d.timeout_normal_ms, 10000);
-    assert_eq!(d.timeout_critical_ms, 0);
-    assert_eq!(d.layer, "overlay");
-    assert_eq!(d.output, "");
+    let s = &settings.subscriber;
+    assert_eq!(s.stack_gap, 10);
+    assert_eq!(s.anchor, "bottom-right");
+    assert_eq!(s.margin, 0);
+    assert_eq!(s.layer, "overlay");
+    assert_eq!(s.output, "");
+    assert_eq!(s.exec.as_deref(), Some("scripts/notred-subscribe.sh"));
+    assert_eq!(s.command.as_deref(), Some("notredctl"));
+    assert!(s.socket.is_none());
 }
 
 // ── Settings::resolve — CardStyle ─────────────────────────────────────────────
@@ -125,9 +120,9 @@ fn card_style_from_merged_urgency_theme() {
     let (config, config_path, base) = load_examples();
     let overrides = load_overrides(&config, &config_path).unwrap();
 
-    let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Critical));
+    let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Critical), None, None);
     let merged_theme = apply_layers(&base, &layers);
-    let card = card_style_from_theme(&merged_theme, None).unwrap();
+    let card = card_style_from_theme(&merged_theme).unwrap();
     // urgency/critical overrides background and border colors
     assert_eq!(card.background_bgra[2], 0xbf); // R byte of #bf616aff
     assert_eq!(card.background_bgra[1], 0x61); // G byte
@@ -139,8 +134,9 @@ fn card_style_from_merged_urgency_theme() {
 fn load_overrides_returns_all_top_level_fragments() {
     let (config, config_path, _) = load_examples();
     let overrides = load_overrides(&config, &config_path).unwrap();
-    // examples/config.toml has 3 overrides: urgency/low, urgency/critical, apps/some_app
-    assert_eq!(overrides.len(), 3);
+    // examples/config.toml has 5 overrides: urgency/low, urgency/critical, apps/some_app,
+    // category/email_arrived, desktop-entry/thunderbird
+    assert_eq!(overrides.len(), 5);
 }
 
 #[test]
@@ -181,7 +177,7 @@ fn urgency_only_populates_base_urgency() {
     let (config, config_path, _) = load_examples();
     let overrides = load_overrides(&config, &config_path).unwrap();
 
-    let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Critical));
+    let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Critical), None, None);
     assert!(layers.base_urgency.is_some());
     assert_eq!(
         layers.base_urgency.unwrap().config.override_meta.level,
@@ -196,7 +192,7 @@ fn app_only_populates_app_layer() {
     let (config, config_path, _) = load_examples();
     let overrides = load_overrides(&config, &config_path).unwrap();
 
-    let layers = resolve_layers(&overrides, Some("some_app"), None);
+    let layers = resolve_layers(&overrides, Some("some_app"), None, None, None);
     assert!(layers.base_urgency.is_none());
     assert_eq!(
         layers.app.unwrap().config.override_meta.name.as_deref(),
@@ -211,7 +207,13 @@ fn app_and_urgency_populates_all_three_layers() {
     let overrides = load_overrides(&config, &config_path).unwrap();
 
     // some_app + Critical: all three layers should be populated
-    let layers = resolve_layers(&overrides, Some("some_app"), Some(&UrgencyLevel::Critical));
+    let layers = resolve_layers(
+        &overrides,
+        Some("some_app"),
+        Some(&UrgencyLevel::Critical),
+        None,
+        None,
+    );
     assert!(
         layers.base_urgency.is_some(),
         "global urgency/critical should match"
@@ -229,7 +231,13 @@ fn app_with_unmatched_urgency_has_no_app_urgency() {
     let overrides = load_overrides(&config, &config_path).unwrap();
 
     // apps/some_app has no urgency/normal sub-override
-    let layers = resolve_layers(&overrides, Some("some_app"), Some(&UrgencyLevel::Normal));
+    let layers = resolve_layers(
+        &overrides,
+        Some("some_app"),
+        Some(&UrgencyLevel::Normal),
+        None,
+        None,
+    );
     assert!(layers.base_urgency.is_none());
     assert!(layers.app.is_some());
     assert!(layers.app_urgency.is_none());
@@ -240,7 +248,13 @@ fn unknown_app_all_layers_none() {
     let (config, config_path, _) = load_examples();
     let overrides = load_overrides(&config, &config_path).unwrap();
 
-    let layers = resolve_layers(&overrides, Some("unknown_app"), Some(&UrgencyLevel::Normal));
+    let layers = resolve_layers(
+        &overrides,
+        Some("unknown_app"),
+        Some(&UrgencyLevel::Normal),
+        None,
+        None,
+    );
     assert!(layers.base_urgency.is_none());
     assert!(layers.app.is_none());
     assert!(layers.app_urgency.is_none());
@@ -251,10 +265,146 @@ fn no_context_all_layers_none() {
     let (config, config_path, _) = load_examples();
     let overrides = load_overrides(&config, &config_path).unwrap();
 
-    let layers = resolve_layers(&overrides, None, None);
+    let layers = resolve_layers(&overrides, None, None, None, None);
     assert!(layers.base_urgency.is_none());
     assert!(layers.app.is_none());
     assert!(layers.app_urgency.is_none());
+}
+
+fn override_with_fragment_theme(frag_toml: &str, theme_toml: &str) -> LoadedOverride {
+    let config: FragmentConfig = toml::from_str(frag_toml).unwrap();
+    let theme: FragmentTheme = toml::from_str(theme_toml).unwrap();
+    LoadedOverride {
+        config,
+        theme: Some(theme),
+        nested: vec![],
+    }
+}
+
+#[test]
+fn category_only_populates_base_category() {
+    let overrides = vec![override_with_fragment_theme(
+        r#"
+[override]
+type = "category"
+name = "email.arrived"
+"#,
+        r##"
+[colors]
+background = "#000000ff"
+"##,
+    )];
+
+    let layers = resolve_layers(&overrides, None, None, Some("email.arrived"), None);
+    assert!(layers.base_category.is_some());
+    assert!(layers.base_urgency.is_none());
+    assert!(layers.base_desktop_entry.is_none());
+    assert!(layers.app.is_none());
+
+    // non-matching category name → no match
+    let layers = resolve_layers(&overrides, None, None, Some("email.other"), None);
+    assert!(layers.base_category.is_none());
+}
+
+#[test]
+fn desktop_entry_only_populates_base_desktop_entry() {
+    let overrides = vec![override_with_fragment_theme(
+        r#"
+[override]
+type = "desktop-entry"
+name = "thunderbird"
+"#,
+        r##"
+[colors]
+background = "#000000ff"
+"##,
+    )];
+
+    let layers = resolve_layers(&overrides, None, None, None, Some("thunderbird"));
+    assert!(layers.base_desktop_entry.is_some());
+    assert!(layers.base_category.is_none());
+    assert!(layers.base_urgency.is_none());
+
+    let layers = resolve_layers(&overrides, None, None, None, Some("firefox"));
+    assert!(layers.base_desktop_entry.is_none());
+}
+
+#[test]
+fn category_theme_is_applied_over_base() {
+    let overrides = vec![override_with_fragment_theme(
+        r#"
+[override]
+type = "category"
+name = "email.arrived"
+"#,
+        r##"
+[colors]
+background = "#123456ff"
+"##,
+    )];
+    let (config, _, base) = load_examples();
+    let _ = config;
+
+    let layers = resolve_layers(&overrides, None, None, Some("email.arrived"), None);
+    let merged = apply_layers(&base, &layers);
+    assert_eq!(merged.colors.background, "#123456ff");
+    // untouched keys keep base values
+    assert_eq!(merged.colors.foreground, base.colors.foreground);
+}
+
+#[test]
+fn app_wins_over_category_and_desktop_entry() {
+    // Precedence: base → base_urgency → base_category → base_desktop_entry → app → app_urgency
+    let category = override_with_fragment_theme(
+        r#"
+[override]
+type = "category"
+name = "email.arrived"
+"#,
+        r##"
+[colors]
+background = "#111111ff"
+"##,
+    );
+    let desktop_entry = override_with_fragment_theme(
+        r#"
+[override]
+type = "desktop-entry"
+name = "thunderbird"
+"#,
+        r##"
+[colors]
+background = "#222222ff"
+"##,
+    );
+    let app = override_with_fragment_theme(
+        r#"
+[override]
+type = "app"
+name = "thunderbird"
+"#,
+        r##"
+[colors]
+background = "#333333ff"
+"##,
+    );
+    let overrides = vec![category, desktop_entry, app];
+    let (_, _, base) = load_examples();
+
+    let layers = resolve_layers(
+        &overrides,
+        Some("thunderbird"),
+        None,
+        Some("email.arrived"),
+        Some("thunderbird"),
+    );
+    assert!(layers.base_category.is_some());
+    assert!(layers.base_desktop_entry.is_some());
+    assert!(layers.app.is_some());
+
+    let merged = apply_layers(&base, &layers);
+    // `app` is applied last among these three, so it wins.
+    assert_eq!(merged.colors.background, "#333333ff");
 }
 
 // ── apply_layers ──────────────────────────────────────────────────────────────
@@ -264,7 +414,7 @@ fn urgency_low_colors_applied() {
     let (config, config_path, base) = load_examples();
     let overrides = load_overrides(&config, &config_path).unwrap();
 
-    let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Low));
+    let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Low), None, None);
     let merged = apply_layers(&base, &layers);
     assert_eq!(merged.colors.background, "#2e3440ff");
     assert_eq!(merged.colors.border, "#4c566aff");
@@ -281,7 +431,7 @@ fn urgency_critical_colors_applied() {
     let (config, config_path, base) = load_examples();
     let overrides = load_overrides(&config, &config_path).unwrap();
 
-    let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Critical));
+    let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Critical), None, None);
     let merged = apply_layers(&base, &layers);
     assert_eq!(merged.colors.background, "#bf616aff");
     assert_eq!(merged.colors.border, "#d08770ff");
@@ -297,7 +447,13 @@ fn app_urgency_layers_stack_in_specificity_order() {
     let (config, config_path, base) = load_examples();
     let overrides = load_overrides(&config, &config_path).unwrap();
 
-    let layers = resolve_layers(&overrides, Some("some_app"), Some(&UrgencyLevel::Critical));
+    let layers = resolve_layers(
+        &overrides,
+        Some("some_app"),
+        Some(&UrgencyLevel::Critical),
+        None,
+        None,
+    );
     assert!(layers.base_urgency.is_some());
     assert!(layers.app.is_some());
     assert!(layers.app_urgency.is_some());
@@ -313,24 +469,8 @@ fn no_layers_returns_base_unchanged() {
     let (config, config_path, base) = load_examples();
     let overrides = load_overrides(&config, &config_path).unwrap();
 
-    let layers = resolve_layers(&overrides, None, None);
+    let layers = resolve_layers(&overrides, None, None, None, None);
     let merged = apply_layers(&base, &layers);
     assert_eq!(merged.colors.background, base.colors.background);
     assert_eq!(merged.font.name, base.font.name);
-}
-
-// ── resolve_events ────────────────────────────────────────────────────────────
-
-#[test]
-fn resolve_events_falls_back_to_base() {
-    let (config, config_path, _) = load_examples();
-    let overrides = load_overrides(&config, &config_path).unwrap();
-    // urgency/low fragment has no [events]; base config has an empty [events] table
-    let layers = resolve_layers(&overrides, None, Some(&UrgencyLevel::Low));
-    assert!(layers.base_urgency.unwrap().config.events.is_none());
-    let events = resolve_events(config.events.as_ref(), &layers);
-    // falls back to base; examples/config.toml [events] table exists but all keys absent
-    let ev = events.expect("base [events] table is present");
-    assert!(ev.on_button_left.is_none());
-    assert!(ev.on_button_right.is_none());
 }

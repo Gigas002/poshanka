@@ -1,54 +1,26 @@
-/// Phase 0 overlay: solid-color Wayland surface (removed in Phase 3 when real cards arrive).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OverlaySpec {
-    pub width: u32,
-    pub height: u32,
-    /// Pixel format for SHM buffer: `[b, g, r, a]` per pixel.
-    pub background_bgra: [u8; 4],
-}
+// ── Runtime spec types ────────────────────────────────────────────────────────
 
-impl OverlaySpec {
-    pub fn new(width: u32, height: u32, background_bgra: [u8; 4]) -> Self {
-        Self {
-            width: width.max(1),
-            height: height.max(1),
-            background_bgra,
-        }
-    }
-}
-
-// ── Runtime spec types (Phase 1 step 4) ──────────────────────────────────────
-
-/// Daemon-wide configuration resolved from `config.toml` at startup.
+/// Subscriber-wide configuration: placement, layer shell, and provider feed wiring.
 #[derive(Debug, Clone)]
-pub struct DaemonSpec {
+pub struct SubscriberSpec {
     // [stack]
-    pub stack_max: u32,
+    pub stack_gap: u32,
     // [placement]
     pub anchor: String,
-    pub gap: u32,
     pub margin: u32,
-    // [queue]
-    pub queue_history: bool,
-    pub queue_max: u32,
-    pub queue_sort: String,
-    pub queue_order: String,
-    // [timeouts]
-    pub timeout_ignore: bool,
-    pub timeout_default_ms: u64,
-    pub timeout_low_ms: u64,
-    pub timeout_normal_ms: u64,
-    pub timeout_critical_ms: u64,
     // [layer]
     pub layer: String,
     pub output: String,
+    // [provider]
+    pub exec: Option<String>,
+    pub command: Option<String>,
+    pub socket: Option<String>,
 }
 
 /// Resolved visual style for a notification card.
 ///
-/// Colors are stored as validated BGRA bytes.  This is the *base* style (from
-/// `theme.toml` + base `config.toml` events).  Per-notification overrides are
-/// applied at notification time via `apply_layers` / `resolve_events`.
+/// Colors are stored as validated BGRA bytes. Per-notification theme overrides
+/// are applied at notification time via `apply_layers`.
 #[derive(Debug, Clone)]
 pub struct CardStyle {
     // colors
@@ -79,18 +51,70 @@ pub struct CardStyle {
     pub icon_theme: String,
     // progress
     pub progress_mode: ProgressMode,
-    // events
-    pub events: CardEvents,
+    /// Bar thickness in pixels; `0` disables the bar even when a notification
+    /// carries a `progress` value.
+    pub progress_height: u32,
 }
 
-/// Resolved shell hooks for card interaction events.
-#[derive(Debug, Clone, Default)]
-pub struct CardEvents {
-    pub on_button_left: Option<String>,
-    pub on_button_middle: Option<String>,
-    pub on_button_right: Option<String>,
-    pub on_notify: Option<String>,
-    pub on_touch: Option<String>,
+/// One notification from a provider feed `list` / subscribe `update` payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationView {
+    pub id: u32,
+    pub app_id: String,
+    pub summary: String,
+    pub body: String,
+    pub urgency: Urgency,
+    /// Freedesktop `expire_timeout` semantics: `-1` = server default, `0` = never
+    /// expire, `>0` = milliseconds. `None` when the provider omits the field.
+    pub timeout_ms: Option<i32>,
+    pub has_actions: bool,
+    pub icon: Option<IconRef>,
+    /// FDN `value` hint (progress percent, `0..=100`); `None` when the
+    /// provider omits it or reported it out of range.
+    pub progress: Option<i32>,
+    /// FDN `category` hint (e.g. `"email.arrived"`).
+    pub category: Option<String>,
+    /// FDN `desktop-entry` hint (desktop file id, no `.desktop` suffix).
+    pub desktop_entry: Option<String>,
+    /// Whether `body` may contain Pango markup the sender expects rendered
+    /// (provider's `body_markup` capability snapshot) rather than escaped
+    /// plain text.
+    pub body_markup: bool,
+}
+
+/// Icon reference from a provider feed payload (`icon.name` / `icon.path` /
+/// raw pixel data).
+///
+/// `raw` (when present) is used directly; otherwise `path` is used directly;
+/// otherwise `name` is looked up as an XDG icon-theme name under
+/// `CardStyle::icon_theme`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IconRef {
+    pub name: Option<String>,
+    pub path: Option<String>,
+    pub raw: Option<RawIconData>,
+}
+
+/// Raw pixel buffer from the FDN `image-data` hint (notred wire `IconRef::Raw`)
+/// — used by senders (chat app avatars, etc.) with no icon-theme name or
+/// on-disk file. `data_base64` is decoded lazily at render time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawIconData {
+    pub width: i32,
+    pub height: i32,
+    /// Bytes per row, including any padding (may exceed `width * channels`).
+    pub rowstride: i32,
+    pub has_alpha: bool,
+    pub bits_per_sample: i32,
+    pub channels: i32,
+    pub data_base64: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Urgency {
+    Low,
+    Normal,
+    Critical,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

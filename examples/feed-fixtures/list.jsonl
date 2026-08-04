@@ -1,0 +1,1 @@
+{"v":1,"type":"items","items":[{"id":1,"app_id":"firefox","summary":"Hello","body":"World","urgency":"normal","timeout_ms":10000,"has_actions":false},{"id":2,"app_id":"telegram","summary":"Ping","body":"","urgency":"critical","timeout_ms":0,"has_actions":true}]}

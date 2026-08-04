@@ -16,4 +16,7 @@ pub enum PoshankaError {
 
     #[error("Wayland protocol error: {0}")]
     WaylandProtocol(String),
+
+    #[error("render error: {0}")]
+    Render(String),
 }

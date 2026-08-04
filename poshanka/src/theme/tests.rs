@@ -32,6 +32,41 @@ fn deserializes_examples_theme() {
     assert_eq!(theme.icons.position, IconPosition::Left);
     assert_eq!(theme.icons.theme, "");
     assert_eq!(theme.progress.mode, ProgressMode::Over);
+    assert_eq!(theme.progress.height, 4);
+}
+
+#[test]
+fn progress_height_defaults_when_omitted() {
+    let toml = r##"
+[font]
+name = "Sans"
+size = 12.0
+[colors]
+background = "#000000ff"
+foreground = "#ffffffff"
+border = "#000000ff"
+progress = "#000000ff"
+[layout]
+width = 300
+height = 100
+padding = 5
+margin = 0
+[border]
+size = 1
+radius = 0
+[text]
+alignment = "left"
+summary = "{summary}"
+body = "{body}"
+[icons]
+size = 0
+position = "left"
+theme = ""
+[progress]
+mode = "over"
+"##;
+    let theme: Theme = toml::from_str(toml).unwrap();
+    assert_eq!(theme.progress.height, 4);
 }
 
 #[test]

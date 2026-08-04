@@ -82,6 +82,14 @@ pub enum IconPosition {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Progress {
     pub mode: ProgressMode,
+    /// Bar thickness in pixels; `0` disables the bar even when a notification
+    /// carries a `value` hint.
+    #[serde(default = "default_progress_height")]
+    pub height: u32,
+}
+
+fn default_progress_height() -> u32 {
+    4
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

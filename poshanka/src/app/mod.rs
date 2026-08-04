@@ -1,14 +1,45 @@
-use std::process::ExitCode;
+mod style;
 
-use crate::settings::{Settings, overlay_spec_from_card};
+use std::path::Path;
 
-pub fn run(settings: &Settings) -> ExitCode {
-    let overlay = overlay_spec_from_card(&settings.card);
-    match libposhanka::run_overlay(overlay) {
-        Ok(()) => ExitCode::SUCCESS,
+use libposhanka::{ProviderSpec, SubscriberRun, run_subscriber};
+
+use crate::settings::Settings;
+use crate::theme;
+use style::OverrideStyleSource;
+
+pub fn run(settings: &Settings, config_path: &Path) -> std::process::ExitCode {
+    let mut provider = ProviderSpec::from(&settings.subscriber);
+    if let Some(exec) = provider.exec.as_ref() {
+        provider.exec = Some(
+            theme::resolve_path(config_path, exec)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+
+    let style_source = match OverrideStyleSource::load(config_path) {
+        Ok(source) => source,
         Err(err) => {
-            tracing::error!(%err, "Wayland session ended with an error");
-            ExitCode::from(1)
+            tracing::error!(%err, path = %config_path.display(), "failed to load override style source");
+            return std::process::ExitCode::from(1);
+        }
+    };
+
+    let run = SubscriberRun {
+        provider,
+        stack: settings.subscriber.clone(),
+        style_source: Box::new(style_source),
+    };
+
+    match run_subscriber(run) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(err) => {
+            tracing::error!(%err, "subscriber session ended with an error");
+            std::process::ExitCode::from(1)
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

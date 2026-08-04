@@ -12,7 +12,8 @@ name = "poshanka"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["icons"]
+icons = ["libposhanka/icons"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
