@@ -1,0 +1,6 @@
+[override]
+type = "desktop-entry"
+name = "thunderbird"
+
+[paths]
+theme = "theme.toml"

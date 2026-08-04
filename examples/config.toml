@@ -7,6 +7,8 @@ overrides = [
     "urgency/low/config.toml",
     "urgency/critical/config.toml",
     "apps/some_app/config.toml",
+    "category/email_arrived/config.toml",
+    "desktop-entry/thunderbird/config.toml",
 ]
 
 [provider]

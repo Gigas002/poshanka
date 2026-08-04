@@ -1,0 +1,6 @@
+[override]
+type = "category"
+name = "email.arrived"
+
+[paths]
+theme = "theme.toml"

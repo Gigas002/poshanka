@@ -43,3 +43,6 @@ theme = ""
 [progress]
 # over, source
 mode = "over"
+# bar thickness in pixels; 0 disables the bar even when a notification
+# carries a `value` hint
+height = 4
