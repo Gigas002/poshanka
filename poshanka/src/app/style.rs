@@ -41,7 +41,13 @@ impl OverrideStyleSource {
 impl StyleSource for OverrideStyleSource {
     fn style_for(&mut self, notification: &NotificationView) -> CardStyle {
         let urgency = to_urgency_level(notification.urgency);
-        let layers = resolve_layers(&self.overrides, Some(&notification.app_id), Some(&urgency));
+        let layers = resolve_layers(
+            &self.overrides,
+            Some(&notification.app_id),
+            Some(&urgency),
+            notification.category.as_deref(),
+            notification.desktop_entry.as_deref(),
+        );
         let merged = apply_layers(&self.base_theme, &layers);
         card_style_from_theme(&merged).unwrap_or_else(|err| {
             tracing::warn!(

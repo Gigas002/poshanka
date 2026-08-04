@@ -51,6 +51,9 @@ pub struct CardStyle {
     pub icon_theme: String,
     // progress
     pub progress_mode: ProgressMode,
+    /// Bar thickness in pixels; `0` disables the bar even when a notification
+    /// carries a `progress` value.
+    pub progress_height: u32,
 }
 
 /// One notification from a provider feed `list` / subscribe `update` payload.
@@ -66,6 +69,17 @@ pub struct NotificationView {
     pub timeout_ms: Option<i32>,
     pub has_actions: bool,
     pub icon: Option<IconRef>,
+    /// FDN `value` hint (progress percent, `0..=100`); `None` when the
+    /// provider omits it or reported it out of range.
+    pub progress: Option<i32>,
+    /// FDN `category` hint (e.g. `"email.arrived"`).
+    pub category: Option<String>,
+    /// FDN `desktop-entry` hint (desktop file id, no `.desktop` suffix).
+    pub desktop_entry: Option<String>,
+    /// Whether `body` may contain Pango markup the sender expects rendered
+    /// (provider's `body_markup` capability snapshot) rather than escaped
+    /// plain text.
+    pub body_markup: bool,
 }
 
 /// Icon reference from a provider feed payload (`icon.name` / `icon.path` /

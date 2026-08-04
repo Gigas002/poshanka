@@ -20,6 +20,30 @@ fn parses_raw_icon_shape() {
     assert_eq!(raw.data_base64, "AAAAAA==");
 }
 
+#[test]
+fn parses_value_category_desktop_entry_and_body_markup() {
+    let line = r#"{"v":1,"type":"items","items":[{"id":1,"app_id":"thunderbird","summary":"Hi","body":"<b>bold</b>","urgency":"normal","timeout_ms":-1,"has_actions":false,"value":55,"category":"email.arrived","desktop_entry":"thunderbird","body_markup":true}]}"#;
+    let FeedMessage::Items(items) = parse_line(line).unwrap().unwrap() else {
+        panic!("expected items response");
+    };
+    assert_eq!(items[0].progress, Some(55));
+    assert_eq!(items[0].category.as_deref(), Some("email.arrived"));
+    assert_eq!(items[0].desktop_entry.as_deref(), Some("thunderbird"));
+    assert!(items[0].body_markup);
+}
+
+#[test]
+fn missing_progress_fields_default_to_none_and_false() {
+    let line = r#"{"v":1,"type":"items","items":[{"id":1,"app_id":"firefox","summary":"Hi","body":"","urgency":"normal","timeout_ms":-1,"has_actions":false}]}"#;
+    let FeedMessage::Items(items) = parse_line(line).unwrap().unwrap() else {
+        panic!("expected items response");
+    };
+    assert_eq!(items[0].progress, None);
+    assert_eq!(items[0].category, None);
+    assert_eq!(items[0].desktop_entry, None);
+    assert!(!items[0].body_markup);
+}
+
 fn fixtures_dir() -> std::path::PathBuf {
     Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -46,6 +70,10 @@ fn sample_notification() -> NotificationView {
         timeout_ms: Some(10_000),
         has_actions: false,
         icon: None,
+        progress: None,
+        category: None,
+        desktop_entry: None,
+        body_markup: false,
     }
 }
 

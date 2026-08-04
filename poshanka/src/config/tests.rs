@@ -15,7 +15,7 @@ fn deserializes_examples_config() {
     ));
     let cfg = Config::load(path).expect("examples/config.toml must parse");
     assert_eq!(cfg.paths.theme, "theme.toml");
-    assert_eq!(cfg.paths.overrides.len(), 3);
+    assert_eq!(cfg.paths.overrides.len(), 5);
     assert_eq!(cfg.provider.command.as_deref(), Some("notredctl"));
     assert_eq!(
         cfg.provider.exec.as_deref(),
@@ -134,6 +134,31 @@ fn deserializes_app_fragment() {
     assert!(frag.override_meta.level.is_none());
     let paths = frag.paths.as_ref().unwrap();
     assert_eq!(paths.overrides.len(), 2);
+}
+
+#[test]
+fn deserializes_category_fragment() {
+    let toml = r#"
+[override]
+type = "category"
+name = "email.arrived"
+"#;
+    let frag: FragmentConfig = toml::from_str(toml).unwrap();
+    assert_eq!(frag.override_meta.kind, OverrideType::Category);
+    assert_eq!(frag.override_meta.name.as_deref(), Some("email.arrived"));
+    assert!(frag.override_meta.level.is_none());
+}
+
+#[test]
+fn deserializes_desktop_entry_fragment() {
+    let toml = r#"
+[override]
+type = "desktop-entry"
+name = "thunderbird"
+"#;
+    let frag: FragmentConfig = toml::from_str(toml).unwrap();
+    assert_eq!(frag.override_meta.kind, OverrideType::DesktopEntry);
+    assert_eq!(frag.override_meta.name.as_deref(), Some("thunderbird"));
 }
 
 #[test]

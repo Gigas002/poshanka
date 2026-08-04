@@ -2,7 +2,7 @@ use cairo::{Context, Format, ImageSurface, Operator};
 use pangocairo::functions::show_layout;
 
 use crate::error::PoshankaError;
-use crate::model::{CardStyle, NotificationView};
+use crate::model::{CardStyle, NotificationView, ProgressMode};
 
 use super::font::FontContext;
 use super::measure::{ComputedCard, measure_card, text_align_to_pango};
@@ -74,6 +74,10 @@ pub fn paint_computed(
             paint_icon(&cr, style, icon, computed.icon_ref.as_ref())?;
             #[cfg(not(feature = "icons"))]
             paint_icon_placeholder(&cr, style, icon)?;
+        }
+
+        if let Some(progress) = &computed.progress {
+            paint_progress(&cr, style, progress)?;
         }
 
         font.set_alignment(text_align_to_pango(&style.text_alignment));
@@ -161,6 +165,37 @@ fn paint_icon_surface(
         .map_err(|e| PoshankaError::Render(format!("icon paint: {e}")))?;
     cr.restore()
         .map_err(|e| PoshankaError::Render(format!("icon restore: {e}")))?;
+    Ok(())
+}
+
+/// Paint the filled portion of the progress bar. `style.progress_mode`
+/// selects the Cairo compositing operator: `Over` blends the fill with the
+/// existing card background, `Source` replaces those pixels outright
+/// regardless of the fill color's alpha — matching mako's `progress-color`
+/// `over`/`source` modes.
+fn paint_progress(
+    cr: &Context,
+    style: &CardStyle,
+    progress: &super::measure::ProgressRect,
+) -> Result<(), PoshankaError> {
+    if progress.width <= 0.0 || progress.height <= 0.0 || progress.fraction <= 0.0 {
+        return Ok(());
+    }
+
+    let operator = match style.progress_mode {
+        ProgressMode::Over => Operator::Over,
+        ProgressMode::Source => Operator::Source,
+    };
+    cr.save()
+        .map_err(|e| PoshankaError::Render(format!("progress save: {e}")))?;
+    cr.set_operator(operator);
+    set_source_bgra(cr, style.progress_bgra);
+    let fill_width = progress.width * progress.fraction;
+    cr.rectangle(progress.x, progress.y, fill_width, progress.height);
+    cr.fill()
+        .map_err(|e| PoshankaError::Render(format!("progress fill: {e}")))?;
+    cr.restore()
+        .map_err(|e| PoshankaError::Render(format!("progress restore: {e}")))?;
     Ok(())
 }
 

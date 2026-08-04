@@ -11,6 +11,10 @@ fn sample(id: u32) -> NotificationView {
         timeout_ms: None,
         has_actions: false,
         icon: None,
+        progress: None,
+        category: None,
+        desktop_entry: None,
+        body_markup: false,
     }
 }
 

@@ -70,17 +70,25 @@ pub struct FragmentConfig {
 pub struct OverrideMeta {
     #[serde(rename = "type")]
     pub kind: OverrideType,
-    /// Required when `kind == App`.
+    /// Match value for `kind == App | Category | DesktopEntry` (exact string
+    /// match against the notification's `app_id` / `category` /
+    /// `desktop_entry` field, respectively).
     pub name: Option<String>,
     /// Required when `kind == Urgency`.
     pub level: Option<UrgencyLevel>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum OverrideType {
     App,
     Urgency,
+    /// Match the FDN `category` hint (e.g. `"email.arrived"`) — see
+    /// `NotificationView::category`.
+    Category,
+    /// Match the FDN `desktop-entry` hint (desktop file id, no `.desktop`
+    /// suffix) — see `NotificationView::desktop_entry`.
+    DesktopEntry,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

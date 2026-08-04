@@ -1,12 +1,13 @@
-//! `zwlr_layer_shell_v1` overlay: one Wayland surface per notification `id`,
-//! replicated on every connected output (or a single named output when
-//! `[layer].output` is set).
+//! `zwlr_layer_shell_v1` overlay: one Wayland surface **per output** (or a
+//! single named output when `[layer].output` is set), holding the whole
+//! notification stack composed into one buffer.
 //!
-//! Each visible notification (per the provider feed snapshot) gets its own
-//! layer-shell surface, sized and painted via [`crate::render::paint_card`].
-//! Surfaces are created/destroyed as the feed's `id` set changes, and
-//! repositioned along the configured corner using `[stack].gap` +
-//! `[placement].margin`.
+//! On every feed update, all visible cards are painted independently (via
+//! [`crate::render::paint_card`]) and then composed top-to-bottom into a
+//! single stack image (see `compose::compose_stack`); each output's surface
+//! is resized/repainted to that composed image. Per-card hit-testing for
+//! pointer/touch gestures is done against the composed image's recorded
+//! per-card extents (`compose::CardRow`), not against separate surfaces.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -21,17 +22,18 @@ use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
     wl_surface, wl_touch,
 };
-use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
     zwlr_layer_surface_v1::{self, KeyboardInteractivity, ZwlrLayerSurfaceV1},
 };
 
 mod anchor;
+mod compose;
 mod stack;
 
 use anchor::Corner;
-use stack::stack_offsets;
+use compose::{CardRow, StackedFrame, compose_stack};
 
 use crate::error::PoshankaError;
 use crate::feed::{self, FeedSignal, NotificationState, ProviderSpec};
@@ -66,7 +68,7 @@ pub struct FeedHandle {
     pub rx: mpsc::Receiver<FeedSignal>,
 }
 
-/// Runs the per-notification card stack until the compositor connection closes
+/// Runs the notification card stack until the compositor connection closes
 /// or an unrecoverable protocol error occurs.
 pub fn run_overlay(
     stack_spec: SubscriberSpec,
@@ -102,10 +104,11 @@ pub fn run_overlay(
         seat: None,
         pointer: None,
         touch: None,
-        pointer_focus: None,
+        pointer_pos: None,
+        card_rows: Vec::new(),
         output_filter: stack_spec.output.clone(),
         outputs: HashMap::new(),
-        surfaces: HashMap::new(),
+        stack_surfaces: HashMap::new(),
     };
 
     loop {
@@ -201,16 +204,21 @@ struct AppState {
     seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
     touch: Option<wl_touch::WlTouch>,
-    /// Notification `id` of the card currently under the pointer, if any.
-    pointer_focus: Option<u32>,
+    /// Last known pointer position, in the focused surface's local
+    /// coordinates (cleared on `Leave`). Since every output's surface shows
+    /// the identical composed stack, only the position — not which output —
+    /// is needed to resolve a card via [`AppState::card_at`].
+    pointer_pos: Option<(f64, f64)>,
+    /// Per-card extents within the composed stack image, from the most
+    /// recent [`AppState::try_sync_stack`] — shared by every output surface.
+    card_rows: Vec<CardRow>,
     /// `[layer].output` config: empty means "every connected output";
     /// otherwise the `wl_output` name to match (see [`OutputEntry`]).
     output_filter: String,
     /// Known `wl_output` globals, keyed by `wl_registry` name.
     outputs: HashMap<u32, OutputEntry>,
-    /// Live card surfaces, keyed by `(wl_registry` output name`, notification id)`
-    /// so each notification gets one surface per eligible output.
-    surfaces: HashMap<(u32, u32), CardSurface>,
+    /// Live per-output stack surfaces, keyed by `wl_registry` output name.
+    stack_surfaces: HashMap<u32, StackSurface>,
 }
 
 /// A bound `wl_output` global and its name (from the `wl_output::Event::Name`
@@ -220,8 +228,9 @@ struct OutputEntry {
     name: Option<String>,
 }
 
-/// Per-notification layer-shell surface and its SHM buffer state.
-struct CardSurface {
+/// One output's layer-shell surface and SHM buffer state, holding the whole
+/// composed notification stack.
+struct StackSurface {
     surface: wl_surface::WlSurface,
     layer_surface: ZwlrLayerSurfaceV1,
     /// Last size requested via `set_size` (awaiting or matching a configure).
@@ -230,8 +239,6 @@ struct CardSurface {
     configured: bool,
     /// Frame content to paint once the next configure is acked.
     pending_frame: Option<Frame>,
-    /// Solid-color fallback used if the compositor configures an unexpected size.
-    fallback_bgra: [u8; 4],
     margin: (i32, i32, i32, i32),
     pool_file: Option<File>,
     pool: Option<wl_shm_pool::WlShmPool>,
@@ -287,8 +294,26 @@ impl AppState {
             .collect()
     }
 
-    /// Diff the current notification snapshot (across every eligible output)
-    /// against live surfaces, then create/destroy/reposition/repaint as needed.
+    /// Resolve the notification `id` (if any) whose card contains `pos`, in
+    /// the composed stack image's local coordinates.
+    fn card_at(&self, pos: (f64, f64)) -> Option<u32> {
+        let (x, y) = pos;
+        if x < 0.0 || y < 0.0 {
+            return None;
+        }
+        self.card_rows
+            .iter()
+            .find(|row| {
+                x >= f64::from(row.x_start)
+                    && x < f64::from(row.x_end)
+                    && y >= f64::from(row.y_start)
+                    && y < f64::from(row.y_end)
+            })
+            .map(|row| row.id)
+    }
+
+    /// Render every visible notification, compose them into one stack image,
+    /// and sync that image (and each eligible output's surface) to match.
     fn try_sync_stack(&mut self, qh: &QueueHandle<Self>) {
         if !self.dirty || !self.globals_ready() {
             return;
@@ -297,61 +322,74 @@ impl AppState {
 
         let items: Vec<NotificationView> = self.notifications.items().to_vec();
         let output_keys = self.eligible_output_keys();
-        let keep_keys: HashSet<(u32, u32)> = output_keys
-            .iter()
-            .flat_map(|&output_key| items.iter().map(move |v| (output_key, v.id)))
-            .collect();
+        let keep_keys: HashSet<u32> = output_keys.iter().copied().collect();
 
-        let stale: Vec<(u32, u32)> = self
-            .surfaces
+        let stale: Vec<u32> = self
+            .stack_surfaces
             .keys()
             .copied()
             .filter(|key| !keep_keys.contains(key))
             .collect();
         for key in stale {
-            if let Some(card) = self.surfaces.remove(&key) {
-                card.destroy();
+            if let Some(stack) = self.stack_surfaces.remove(&key) {
+                stack.destroy();
             }
         }
 
-        let mut rendered = Vec::with_capacity(items.len());
+        let mut rendered: Vec<(u32, Frame)> = Vec::with_capacity(items.len());
         for view in &items {
             let style = self.style_source.style_for(view);
             match render_frame(&style, view) {
-                Ok(frame) => rendered.push((view.id, style.background_bgra, frame)),
+                Ok(frame) => rendered.push((view.id, frame)),
                 Err(err) => {
                     warn!(id = view.id, %err, "failed to render notification card; skipping");
                 }
             }
         }
 
-        let heights: Vec<u32> = rendered.iter().map(|(_, _, frame)| frame.height).collect();
-        let offsets = stack_offsets(&heights, self.gap, self.base_margin);
+        if rendered.is_empty() {
+            self.card_rows.clear();
+            for (_, stack) in self.stack_surfaces.drain() {
+                stack.destroy();
+            }
+            return;
+        }
+
+        // Bottom-anchored corners put the first (provider-order) card
+        // nearest the screen edge — i.e. painted last (bottommost) in the
+        // composed image — matching the old per-surface margin behavior.
+        if !self.corner.is_top() {
+            rendered.reverse();
+        }
+
+        let stacked: Vec<StackedFrame> = rendered
+            .into_iter()
+            .map(|(id, frame)| StackedFrame { id, frame })
+            .collect();
+        let (composed, rows) = compose_stack(&stacked, self.gap, self.corner.is_right());
+        self.card_rows = rows;
+
+        let margin = self.corner.margins(self.base_margin, 0);
 
         // Bound checks in `globals_ready` guarantee these clones succeed.
         let compositor = self.compositor.clone().expect("compositor bound");
         let layer_shell = self.layer_shell.clone().expect("layer shell bound");
         let shm = self.shm.clone().expect("shm bound");
 
-        for ((id, fallback_bgra, frame), offset) in rendered.into_iter().zip(offsets) {
-            let margin = self.corner.margins(self.base_margin, offset);
-            for &output_key in &output_keys {
-                let Some(output) = self.outputs.get(&output_key).map(|e| e.output.clone()) else {
-                    continue;
-                };
-                self.upsert_surface(
-                    qh,
-                    output_key,
-                    &output,
-                    id,
-                    frame.clone(),
-                    fallback_bgra,
-                    margin,
-                    &compositor,
-                    &layer_shell,
-                    &shm,
-                );
-            }
+        for &output_key in &output_keys {
+            let Some(output) = self.outputs.get(&output_key).map(|e| e.output.clone()) else {
+                continue;
+            };
+            self.upsert_surface(
+                qh,
+                output_key,
+                &output,
+                composed.clone(),
+                margin,
+                &compositor,
+                &layer_shell,
+                &shm,
+            );
         }
     }
 
@@ -361,53 +399,49 @@ impl AppState {
         qh: &QueueHandle<Self>,
         output_key: u32,
         output: &wl_output::WlOutput,
-        id: u32,
         frame: Frame,
-        fallback_bgra: [u8; 4],
         margin: (i32, i32, i32, i32),
         compositor: &wl_compositor::WlCompositor,
         layer_shell: &ZwlrLayerShellV1,
         shm: &wl_shm::WlShm,
     ) {
-        let key = (output_key, id);
-        if let Some(card) = self.surfaces.get_mut(&key) {
-            card.fallback_bgra = fallback_bgra;
-            let size_changed = card.requested_size != (frame.width, frame.height);
-            let margin_changed = card.margin != margin;
+        if let Some(stack) = self.stack_surfaces.get_mut(&output_key) {
+            let size_changed = stack.requested_size != (frame.width, frame.height);
+            let margin_changed = stack.margin != margin;
 
             if margin_changed {
-                card.margin = margin;
+                stack.margin = margin;
                 let (top, right, bottom, left) = margin;
-                card.layer_surface.set_margin(top, right, bottom, left);
+                stack.layer_surface.set_margin(top, right, bottom, left);
             }
 
             if size_changed {
-                card.requested_size = (frame.width, frame.height);
-                card.configured = false;
-                card.layer_surface.set_size(frame.width, frame.height);
-                card.pending_frame = Some(frame);
-                card.surface.commit();
-            } else if card.configured {
-                if let Err(err) = card.paint_frame(shm, qh, &frame) {
-                    warn!(id, %err, "failed to repaint notification card");
+                stack.requested_size = (frame.width, frame.height);
+                stack.configured = false;
+                stack.layer_surface.set_size(frame.width, frame.height);
+                stack.pending_frame = Some(frame);
+                stack.surface.commit();
+            } else if stack.configured {
+                if let Err(err) = stack.paint_frame(shm, qh, &frame) {
+                    warn!(output_key, %err, "failed to repaint notification stack");
                 }
             } else {
-                card.pending_frame = Some(frame);
+                stack.pending_frame = Some(frame);
                 if margin_changed {
-                    card.surface.commit();
+                    stack.surface.commit();
                 }
             }
             return;
         }
 
-        let surface = compositor.create_surface(qh, key);
+        let surface = compositor.create_surface(qh, output_key);
         let layer_surface = layer_shell.get_layer_surface(
             &surface,
             Some(output),
             self.layer,
             "poshanka".into(),
             qh,
-            key,
+            output_key,
         );
 
         layer_surface.set_anchor(self.corner.anchor_bits());
@@ -417,15 +451,14 @@ impl AppState {
         layer_surface.set_size(frame.width, frame.height);
         surface.commit();
 
-        self.surfaces.insert(
-            key,
-            CardSurface {
+        self.stack_surfaces.insert(
+            output_key,
+            StackSurface {
                 surface,
                 layer_surface,
                 requested_size: (frame.width, frame.height),
                 configured: false,
                 pending_frame: Some(frame),
-                fallback_bgra,
                 margin,
                 pool_file: None,
                 pool: None,
@@ -436,7 +469,7 @@ impl AppState {
 
     fn on_configure(
         &mut self,
-        key: (u32, u32),
+        output_key: u32,
         layer_surface: &ZwlrLayerSurfaceV1,
         serial: u32,
         width: u32,
@@ -448,45 +481,41 @@ impl AppState {
         let Some(shm) = self.shm.clone() else {
             return;
         };
-        let Some(card) = self.surfaces.get_mut(&key) else {
+        let Some(stack) = self.stack_surfaces.get_mut(&output_key) else {
             return;
         };
 
         let width = width.max(1);
         let height = height.max(1);
-        card.configured = true;
-        let id = key.1;
+        stack.configured = true;
 
-        let result = match card.pending_frame.take() {
+        let result = match stack.pending_frame.take() {
             Some(frame) if frame.width == width && frame.height == height => {
-                card.paint_frame(&shm, qh, &frame)
+                stack.paint_frame(&shm, qh, &frame)
             }
             Some(frame) => {
                 warn!(
-                    id,
+                    output_key,
                     requested_w = frame.width,
                     requested_h = frame.height,
                     configured_w = width,
                     configured_h = height,
-                    "compositor configured a different size than requested; using solid fallback"
+                    "compositor configured a different size than requested; using transparent fallback"
                 );
-                card.paint_fallback(&shm, qh, width, height)
+                stack.paint_fallback(&shm, qh, width, height)
             }
-            None => card.paint_fallback(&shm, qh, width, height),
+            None => stack.paint_fallback(&shm, qh, width, height),
         };
 
         if let Err(err) = result {
-            warn!(id, %err, "failed to paint notification card");
+            warn!(output_key, %err, "failed to paint notification stack");
         }
     }
 
-    fn on_closed(&mut self, key: (u32, u32)) {
-        let id = key.1;
-        debug!(id, output = key.0, "layer surface closed by compositor");
-        self.surfaces.remove(&key);
-        if self.pointer_focus == Some(id) {
-            self.pointer_focus = None;
-        }
+    fn on_closed(&mut self, output_key: u32) {
+        debug!(output_key, "layer surface closed by compositor");
+        self.stack_surfaces.remove(&output_key);
+        self.pointer_pos = None;
     }
 
     /// Layer B — whole-card shortcut for a primary-button click: `activate`
@@ -545,7 +574,7 @@ enum ProviderAction {
     Input(u32, &'static str),
 }
 
-impl CardSurface {
+impl StackSurface {
     fn paint_frame(
         &mut self,
         shm: &wl_shm::WlShm,
@@ -562,6 +591,8 @@ impl CardSurface {
         )
     }
 
+    /// Fully transparent buffer, used only if the compositor configures a
+    /// size that doesn't match the composed stack image (rare).
     fn paint_fallback(
         &mut self,
         shm: &wl_shm::WlShm,
@@ -571,10 +602,7 @@ impl CardSurface {
     ) -> Result<(), PoshankaError> {
         let stride = width.saturating_mul(4) as i32;
         let size = (stride as u64).saturating_mul(u64::from(height));
-        let mut data = vec![0u8; size as usize];
-        for chunk in data.chunks_exact_mut(4) {
-            chunk.copy_from_slice(&self.fallback_bgra);
-        }
+        let data = vec![0u8; size as usize];
         self.write_buffer(shm, qh, width, height, stride, &data)
     }
 
@@ -707,16 +735,8 @@ impl Dispatch<wl_registry::WlRegistry, ()> for AppState {
                 _ => {}
             },
             wl_registry::Event::GlobalRemove { name } if state.outputs.remove(&name).is_some() => {
-                let stale: Vec<(u32, u32)> = state
-                    .surfaces
-                    .keys()
-                    .copied()
-                    .filter(|(output_key, _)| *output_key == name)
-                    .collect();
-                for key in stale {
-                    if let Some(card) = state.surfaces.remove(&key) {
-                        card.destroy();
-                    }
+                if let Some(stack) = state.stack_surfaces.remove(&name) {
+                    stack.destroy();
                 }
             }
             _ => {}
@@ -780,11 +800,22 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_pointer::Event::Enter { surface, .. } => {
-                state.pointer_focus = surface.data::<(u32, u32)>().map(|key| key.1);
+            wl_pointer::Event::Enter {
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                state.pointer_pos = Some((surface_x, surface_y));
+            }
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                state.pointer_pos = Some((surface_x, surface_y));
             }
             wl_pointer::Event::Leave { .. } => {
-                state.pointer_focus = None;
+                state.pointer_pos = None;
             }
             wl_pointer::Event::Button {
                 button,
@@ -797,7 +828,9 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
                 if button_state != wl_pointer::ButtonState::Released {
                     return;
                 }
-                if let Some(id) = state.pointer_focus {
+                if let Some(pos) = state.pointer_pos
+                    && let Some(id) = state.card_at(pos)
+                {
                     state.handle_pointer_click(id, button);
                 }
             }
@@ -815,42 +848,42 @@ impl Dispatch<wl_touch::WlTouch, ()> for AppState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_touch::Event::Down { surface, .. } = event
-            && let Some(id) = surface.data::<(u32, u32)>().map(|key| key.1)
+        if let wl_touch::Event::Down { x, y, .. } = event
+            && let Some(id) = state.card_at((x, y))
         {
             state.handle_touch_down(id);
         }
     }
 }
 
-impl Dispatch<ZwlrLayerSurfaceV1, (u32, u32)> for AppState {
+impl Dispatch<ZwlrLayerSurfaceV1, u32> for AppState {
     fn event(
         state: &mut Self,
         layer_surface: &ZwlrLayerSurfaceV1,
         event: zwlr_layer_surface_v1::Event,
-        data: &(u32, u32),
+        data: &u32,
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        let key = *data;
+        let output_key = *data;
         match event {
             zwlr_layer_surface_v1::Event::Configure {
                 serial,
                 width,
                 height,
-            } => state.on_configure(key, layer_surface, serial, width, height, qh),
-            zwlr_layer_surface_v1::Event::Closed => state.on_closed(key),
+            } => state.on_configure(output_key, layer_surface, serial, width, height, qh),
+            zwlr_layer_surface_v1::Event::Closed => state.on_closed(output_key),
             _ => {}
         }
     }
 }
 
-impl Dispatch<wl_surface::WlSurface, (u32, u32)> for AppState {
+impl Dispatch<wl_surface::WlSurface, u32> for AppState {
     fn event(
         _: &mut Self,
         _: &wl_surface::WlSurface,
         _: wl_surface::Event,
-        _: &(u32, u32),
+        _: &u32,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {

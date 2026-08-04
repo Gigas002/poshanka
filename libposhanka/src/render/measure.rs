@@ -6,12 +6,23 @@ use super::template::apply_template;
 
 const TEXT_GAP: f64 = 4.0;
 const ICON_GAP: f64 = 4.0;
+const PROGRESS_GAP: f64 = 4.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IconRect {
     pub x: f64,
     pub y: f64,
     pub size: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProgressRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    /// `0.0..=1.0` — `NotificationView::progress` (`0..=100`) divided by 100.
+    pub fraction: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +44,7 @@ pub struct ComputedCard {
     /// can resolve and rasterize the real icon (PNG/SVG) without needing the
     /// original `NotificationView`.
     pub icon_ref: Option<IconRef>,
+    pub progress: Option<ProgressRect>,
 }
 
 pub fn measure_card(
@@ -45,8 +57,16 @@ pub fn measure_card(
     let border = f64::from(style.border_size);
     let padding = f64::from(style.padding);
     let inner_w = f64::from(width) - 2.0 * (border + padding);
-    let max_inner_h = max_height - 2.0 * (border + padding);
     let origin = border + padding;
+
+    let progress_bar_h = f64::from(style.progress_height);
+    let reserve_progress = notification.progress.is_some() && progress_bar_h > 0.0;
+    let progress_reserved_h = if reserve_progress {
+        PROGRESS_GAP + progress_bar_h
+    } else {
+        0.0
+    };
+    let max_inner_h = max_height - 2.0 * (border + padding) - progress_reserved_h;
 
     let icon_size = f64::from(style.icon_size.max(0));
     let reserve_icon = icon_size > 0.0;
@@ -134,18 +154,22 @@ pub fn measure_card(
         _ if reserve_icon => text_stack_h.max(icon_size),
         _ => text_stack_h,
     };
+    let content_h = content_h + progress_reserved_h;
 
     let natural_h = (2.0 * origin + content_h).round() as u32;
     let height = natural_h.min(style.height).max(1);
     let final_inner_h = (f64::from(height) - 2.0 * origin).max(0.0);
+    // Available for text/icon content only — excludes the progress bar row
+    // reserved at the bottom of the card.
+    let content_avail_h = (final_inner_h - progress_reserved_h).max(0.0);
 
     // Text region's own vertical span: excludes icon + gap for Top/Bottom,
     // since those stack the icon and text along the same axis.
     let text_region_h = match style.icon_position {
         IconPos::Top | IconPos::Bottom if reserve_icon => {
-            (final_inner_h - icon_size - ICON_GAP).max(0.0)
+            (content_avail_h - icon_size - ICON_GAP).max(0.0)
         }
-        _ => final_inner_h,
+        _ => content_avail_h,
     };
 
     // Vertically center the text stack within its region; horizontal
@@ -164,7 +188,7 @@ pub fn measure_card(
     if let Some(icon_rect) = icon.as_mut() {
         match style.icon_position {
             IconPos::Left | IconPos::Right => {
-                icon_rect.y = origin + ((final_inner_h - icon_size) / 2.0).max(0.0);
+                icon_rect.y = origin + ((content_avail_h - icon_size) / 2.0).max(0.0);
             }
             IconPos::Bottom => {
                 icon_rect.y = origin + text_region_h + ICON_GAP;
@@ -173,12 +197,21 @@ pub fn measure_card(
         }
     }
 
+    let progress = reserve_progress.then(|| ProgressRect {
+        x: origin,
+        y: origin + final_inner_h - progress_bar_h,
+        width: inner_w,
+        height: progress_bar_h,
+        fraction: f64::from(notification.progress.unwrap_or(0).clamp(0, 100)) / 100.0,
+    });
+
     Ok(ComputedCard {
         width,
         height,
         blocks,
         icon,
         icon_ref: notification.icon.clone(),
+        progress,
     })
 }
 

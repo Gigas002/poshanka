@@ -78,10 +78,14 @@ fn load_single_override(fragment_path: &Path) -> Result<LoadedOverride, crate::e
 /// All applicable override layers for a notification context, in application order.
 ///
 /// Precedence (highest last, so later layers win):
-/// base theme/config → base urgency → app → app urgency
+/// base theme/config → base urgency → base category → base desktop-entry → app → app urgency
 pub struct OverrideLayers<'a> {
     /// Global urgency-type override matching the notification's urgency level (if any).
     pub base_urgency: Option<&'a LoadedOverride>,
+    /// Global category-type override matching the notification's `category` hint (if any).
+    pub base_category: Option<&'a LoadedOverride>,
+    /// Global desktop-entry-type override matching the notification's `desktop_entry` hint (if any).
+    pub base_desktop_entry: Option<&'a LoadedOverride>,
     /// App-type override matching the notification's `app_name` (if any).
     pub app: Option<&'a LoadedOverride>,
     /// Urgency sub-override inside `app`, matching the notification's urgency (if any).
@@ -93,11 +97,27 @@ pub fn resolve_layers<'a>(
     overrides: &'a [LoadedOverride],
     app_name: Option<&str>,
     urgency: Option<&UrgencyLevel>,
+    category: Option<&str>,
+    desktop_entry: Option<&str>,
 ) -> OverrideLayers<'a> {
     let base_urgency = urgency.and_then(|u| {
         overrides.iter().find(|ov| {
             ov.config.override_meta.kind == OverrideType::Urgency
                 && ov.config.override_meta.level.as_ref() == Some(u)
+        })
+    });
+
+    let base_category = category.and_then(|c| {
+        overrides.iter().find(|ov| {
+            ov.config.override_meta.kind == OverrideType::Category
+                && ov.config.override_meta.name.as_deref() == Some(c)
+        })
+    });
+
+    let base_desktop_entry = desktop_entry.and_then(|d| {
+        overrides.iter().find(|ov| {
+            ov.config.override_meta.kind == OverrideType::DesktopEntry
+                && ov.config.override_meta.name.as_deref() == Some(d)
         })
     });
 
@@ -119,6 +139,8 @@ pub fn resolve_layers<'a>(
 
     OverrideLayers {
         base_urgency,
+        base_category,
+        base_desktop_entry,
         app: app_ov,
         app_urgency,
     }
@@ -128,13 +150,25 @@ pub fn resolve_layers<'a>(
 
 /// Apply all override layers to `base`, returning the merged theme.
 ///
-/// Application order: base → base_urgency → app → app_urgency
+/// Application order: base → base_urgency → base_category → base_desktop_entry → app → app_urgency
 pub fn apply_layers(base: &Theme, layers: &OverrideLayers<'_>) -> Theme {
     let t = layers
         .base_urgency
         .and_then(|ov| ov.theme.as_ref())
         .map(|f| base.apply_fragment(f))
         .unwrap_or_else(|| base.clone());
+
+    let t = layers
+        .base_category
+        .and_then(|ov| ov.theme.as_ref())
+        .map(|f| t.apply_fragment(f))
+        .unwrap_or(t);
+
+    let t = layers
+        .base_desktop_entry
+        .and_then(|ov| ov.theme.as_ref())
+        .map(|f| t.apply_fragment(f))
+        .unwrap_or(t);
 
     let t = layers
         .app
@@ -219,6 +253,7 @@ fn build_card_style(theme: &Theme) -> Result<CardStyle, crate::error::Error> {
             TProgressMode::Over => ProgressMode::Over,
             TProgressMode::Source => ProgressMode::Source,
         },
+        progress_height: theme.progress.height,
     })
 }
 

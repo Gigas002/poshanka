@@ -44,4 +44,15 @@ impl Corner {
             Corner::BottomRight => (0, base, offset, 0),
         }
     }
+
+    /// Whether the stack grows down from a top edge (vs. up from a bottom edge).
+    pub(crate) fn is_top(self) -> bool {
+        matches!(self, Corner::TopLeft | Corner::TopRight)
+    }
+
+    /// Whether cards should be right-aligned within the composed stack width
+    /// (narrower cards hug the right edge, matching a right-anchored corner).
+    pub(crate) fn is_right(self) -> bool {
+        matches!(self, Corner::TopRight | Corner::BottomRight)
+    }
 }

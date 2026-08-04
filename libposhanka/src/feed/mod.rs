@@ -111,6 +111,14 @@ pub(crate) struct RawNotification {
     has_actions: bool,
     #[serde(default)]
     icon: Option<RawIcon>,
+    #[serde(default)]
+    value: Option<i32>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    desktop_entry: Option<String>,
+    #[serde(default)]
+    body_markup: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,6 +214,10 @@ impl TryFrom<RawNotification> for NotificationView {
             timeout_ms: raw.timeout_ms,
             has_actions: raw.has_actions,
             icon: raw.icon.map(IconRef::from),
+            progress: raw.value,
+            category: raw.category,
+            desktop_entry: raw.desktop_entry,
+            body_markup: raw.body_markup,
         })
     }
 }

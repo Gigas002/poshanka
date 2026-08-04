@@ -31,6 +31,7 @@ fn test_style() -> CardStyle {
         icon_position: IconPos::Left,
         icon_theme: String::new(),
         progress_mode: ProgressMode::Over,
+        progress_height: 4,
     }
 }
 
@@ -44,6 +45,10 @@ fn test_notification() -> NotificationView {
         timeout_ms: Some(10_000),
         has_actions: false,
         icon: None,
+        progress: None,
+        category: None,
+        desktop_entry: None,
+        body_markup: false,
     }
 }
 
@@ -104,7 +109,10 @@ fn painted_card_has_foreground_text_pixel() {
 
     let block = &computed.blocks[0];
     let x = (block.x + 4.0) as u32;
-    let y = (block.y + 4.0) as u32;
+    // Vertical middle of the line box, not a fixed offset from its top —
+    // robust to how much Pango leading/ascent sits above the glyph ink,
+    // which shifts as `block.y` moves with vertical centering.
+    let y = (block.y + block.height / 2.0) as u32;
     let px = pixel_bgra(
         &frame.data,
         frame.stride,
@@ -113,6 +121,80 @@ fn painted_card_has_foreground_text_pixel() {
     );
     assert_ne!(px, style.background_bgra);
     assert_eq!(px[3], 0xff);
+}
+
+#[test]
+fn no_progress_rect_without_progress_value() {
+    let style = test_style();
+    let notification = test_notification();
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+    assert!(computed.progress.is_none());
+}
+
+#[test]
+fn no_progress_rect_when_height_is_zero() {
+    let mut style = test_style();
+    style.progress_height = 0;
+    let mut notification = test_notification();
+    notification.progress = Some(50);
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+    assert!(computed.progress.is_none());
+}
+
+#[test]
+fn progress_rect_reserves_space_within_card_bounds() {
+    let style = test_style();
+    let mut notification = test_notification();
+    notification.progress = Some(40);
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+
+    let progress = computed.progress.expect("progress rect");
+    assert!((progress.fraction - 0.4).abs() < f64::EPSILON);
+    assert!(
+        progress.y + progress.height <= f64::from(computed.height),
+        "progress bar (y={}, height={}) extends past card height {}",
+        progress.y,
+        progress.height,
+        computed.height
+    );
+    // Bottom-aligned within the card's inner content area.
+    let origin = f64::from(style.border_size + style.padding);
+    assert!((progress.y + progress.height - (f64::from(computed.height) - origin)).abs() < 0.5);
+}
+
+#[test]
+fn progress_value_out_of_range_clamps_to_full_range() {
+    let style = test_style();
+    let mut over = test_notification();
+    over.progress = Some(150);
+    let mut under = test_notification();
+    under.progress = Some(-10);
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+
+    let computed_over = measure_card(&style, &over, &font).expect("measure");
+    assert!((computed_over.progress.unwrap().fraction - 1.0).abs() < f64::EPSILON);
+
+    let computed_under = measure_card(&style, &under, &font).expect("measure");
+    assert!((computed_under.progress.unwrap().fraction - 0.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn painted_card_has_progress_fill_pixel() {
+    let style = test_style();
+    let mut notification = test_notification();
+    notification.progress = Some(100);
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+    let frame = paint_card(&style, &notification, &font).expect("paint");
+
+    let progress = computed.progress.expect("progress rect");
+    let x = (progress.x + 4.0) as u32;
+    let y = (progress.y + progress.height / 2.0) as u32;
+    let px = pixel_bgra(&frame.data, frame.stride, x, y);
+    assert_eq!(px, style.progress_bgra);
 }
 
 #[test]
@@ -182,4 +264,39 @@ fn template_escapes_markup_in_user_text() {
     let font = FontContext::new(&style.font_name, style.font_size).expect("font");
     let computed = measure_card(&style, &notification, &font).expect("measure");
     assert!(computed.blocks[0].markup.contains("&lt;b&gt;"));
+}
+
+#[test]
+fn body_is_escaped_when_body_markup_is_false() {
+    let style = test_style();
+    let mut notification = test_notification();
+    notification.body = "<b>bold</b> body".into();
+    notification.body_markup = false;
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+    assert!(computed.blocks[1].markup.contains("&lt;b&gt;"));
+}
+
+#[test]
+fn body_renders_as_raw_markup_when_body_markup_is_true_and_valid() {
+    let style = test_style();
+    let mut notification = test_notification();
+    notification.body = "<b>bold</b> body".into();
+    notification.body_markup = true;
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+    assert!(computed.blocks[1].markup.contains("<b>bold</b>"));
+    assert!(!computed.blocks[1].markup.contains("&lt;b&gt;"));
+}
+
+#[test]
+fn body_falls_back_to_escaped_when_body_markup_is_malformed() {
+    let style = test_style();
+    let mut notification = test_notification();
+    // Unbalanced tag — not valid Pango markup.
+    notification.body = "<b>unclosed bold".into();
+    notification.body_markup = true;
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+    assert!(computed.blocks[1].markup.contains("&lt;b&gt;"));
 }
