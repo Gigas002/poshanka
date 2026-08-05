@@ -261,6 +261,7 @@ fn painted_card_icon_placeholder_is_visible() {
 }
 
 #[test]
+#[cfg(feature = "icons")]
 fn painted_card_uses_configured_default_icon_when_nothing_else_resolves() {
     // Neither icon.name/path/raw nor the app_id/desktop_entry fallback
     // resolve, but theme.toml's `icons.default` name does — that icon
@@ -300,6 +301,7 @@ fn painted_card_uses_configured_default_icon_when_nothing_else_resolves() {
 }
 
 #[test]
+#[cfg(feature = "icons")]
 fn painted_card_uses_desktop_entry_icon_instead_of_placeholder() {
     // No icon.name/path/raw was sent, but the notification has a
     // desktop_entry hint that resolves in the icon theme — that app icon
