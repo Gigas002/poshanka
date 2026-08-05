@@ -44,6 +44,7 @@ pub struct ComputedCard {
     /// can resolve and rasterize the real icon (PNG/SVG) without needing the
     /// original `NotificationView`.
     pub icon_ref: Option<IconRef>,
+    pub fallback_icon_name: Option<String>,
     pub progress: Option<ProgressRect>,
 }
 
@@ -211,6 +212,11 @@ pub fn measure_card(
         blocks,
         icon,
         icon_ref: notification.icon.clone(),
+        fallback_icon_name: notification
+            .desktop_entry
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| Some(notification.app_id.clone()).filter(|s| !s.is_empty())),
         progress,
     })
 }

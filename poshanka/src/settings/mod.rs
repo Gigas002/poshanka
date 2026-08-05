@@ -249,6 +249,7 @@ fn build_card_style(theme: &Theme) -> Result<CardStyle, crate::error::Error> {
             IconPosition::Bottom => IconPos::Bottom,
         },
         icon_theme: theme.icons.theme.clone(),
+        icon_default_name: theme.icons.default.clone(),
         progress_mode: match theme.progress.mode {
             TProgressMode::Over => ProgressMode::Over,
             TProgressMode::Source => ProgressMode::Source,

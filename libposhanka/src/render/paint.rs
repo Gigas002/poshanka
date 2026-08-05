@@ -71,7 +71,13 @@ pub fn paint_computed(
 
         if let Some(icon) = &computed.icon {
             #[cfg(feature = "icons")]
-            paint_icon(&cr, style, icon, computed.icon_ref.as_ref())?;
+            paint_icon(
+                &cr,
+                style,
+                icon,
+                computed.icon_ref.as_ref(),
+                computed.fallback_icon_name.as_deref(),
+            )?;
             #[cfg(not(feature = "icons"))]
             paint_icon_placeholder(&cr, style, icon)?;
         }
@@ -129,6 +135,7 @@ fn paint_icon(
     style: &CardStyle,
     icon: &super::measure::IconRect,
     icon_ref: Option<&crate::model::IconRef>,
+    fallback_icon_name: Option<&str>,
 ) -> Result<(), PoshankaError> {
     let target_size = icon.size.round().max(1.0) as u32;
 
@@ -147,7 +154,32 @@ fn paint_icon(
     {
         return paint_icon_surface(cr, icon, &surface);
     }
+
+    if let Some(name) = fallback_icon_name
+        && let Some(surface) = named_theme_icon(name, &style.icon_theme, target_size)
+    {
+        return paint_icon_surface(cr, icon, &surface);
+    }
+
+    if !style.icon_default_name.is_empty()
+        && let Some(surface) =
+            named_theme_icon(&style.icon_default_name, &style.icon_theme, target_size)
+    {
+        return paint_icon_surface(cr, icon, &surface);
+    }
+
     paint_icon_placeholder(cr, style, icon)
+}
+
+#[cfg(feature = "icons")]
+fn named_theme_icon(name: &str, icon_theme: &str, target_size: u32) -> Option<cairo::ImageSurface> {
+    let icon_ref = crate::model::IconRef {
+        name: Some(name.to_string()),
+        path: None,
+        raw: None,
+    };
+    let path = crate::icon::resolve_icon_path(&icon_ref, icon_theme)?;
+    crate::icon::load_icon_surface(&path, target_size).ok()
 }
 
 #[cfg(feature = "icons")]

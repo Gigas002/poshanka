@@ -30,6 +30,7 @@ fn test_style() -> CardStyle {
         icon_size: 48,
         icon_position: IconPos::Left,
         icon_theme: String::new(),
+        icon_default_name: String::new(),
         progress_mode: ProgressMode::Over,
         progress_height: 4,
     }
@@ -38,7 +39,7 @@ fn test_style() -> CardStyle {
 fn test_notification() -> NotificationView {
     NotificationView {
         id: 1,
-        app_id: "firefox".into(),
+        app_id: "poshanka-test-app-id-that-does-not-exist".into(),
         summary: "Hello".into(),
         body: "This is a notification body.".into(),
         urgency: Urgency::Normal,
@@ -243,6 +244,9 @@ fn text_stack_centers_vertically_when_icon_taller_than_text() {
 
 #[test]
 fn painted_card_icon_placeholder_is_visible() {
+    // icon_default_name is empty in test_style() (fallback disabled), so
+    // with no icon sent and an app_id/desktop_entry that resolves to
+    // nothing, only the plain placeholder square is left.
     let style = test_style();
     let notification = test_notification();
     let font = FontContext::new(&style.font_name, style.font_size).expect("font");
@@ -254,6 +258,86 @@ fn painted_card_icon_placeholder_is_visible() {
     let y = (icon.y + icon.size / 2.0) as u32;
     let px = pixel_bgra(&frame.data, frame.stride, x, y);
     assert_eq!(px, style.progress_bgra);
+}
+
+#[test]
+#[cfg(feature = "icons")]
+fn painted_card_uses_configured_default_icon_when_nothing_else_resolves() {
+    // Neither icon.name/path/raw nor the app_id/desktop_entry fallback
+    // resolve, but theme.toml's `icons.default` name does — that icon
+    // should be used instead of the accent-colored placeholder square.
+    let dir = tempfile::tempdir().unwrap();
+    let apps_dir = dir.path().join("scalable/status");
+    std::fs::create_dir_all(&apps_dir).unwrap();
+    let icon_path = apps_dir.join("my-configured-default.svg");
+    std::fs::write(
+        &icon_path,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#ff0000"/></svg>"##,
+    )
+    .unwrap();
+
+    let mut style = test_style();
+    style.icon_theme = dir.path().to_string_lossy().into_owned();
+    style.icon_default_name = "my-configured-default".into();
+    let notification = test_notification();
+
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+    let frame = paint_card(&style, &notification, &font).expect("paint");
+
+    let icon = computed.icon.expect("icon rect");
+    let x = (icon.x + icon.size / 2.0) as u32;
+    let y = (icon.y + icon.size / 2.0) as u32;
+    let px = pixel_bgra(&frame.data, frame.stride, x, y);
+    assert_ne!(
+        px, style.progress_bgra,
+        "expected the configured default icon, not the placeholder"
+    );
+    assert_eq!(
+        (px[0], px[1], px[2], px[3]),
+        (0, 0, 255, 255),
+        "opaque red in BGRA order"
+    );
+}
+
+#[test]
+#[cfg(feature = "icons")]
+fn painted_card_uses_desktop_entry_icon_instead_of_placeholder() {
+    // No icon.name/path/raw was sent, but the notification has a
+    // desktop_entry hint that resolves in the icon theme — that app icon
+    // should be painted instead of the accent-colored placeholder square.
+    let dir = tempfile::tempdir().unwrap();
+    let apps_dir = dir.path().join("scalable/apps");
+    std::fs::create_dir_all(&apps_dir).unwrap();
+    let icon_path = apps_dir.join("some-app.svg");
+    std::fs::write(
+        &icon_path,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#ff0000"/></svg>"##,
+    )
+    .unwrap();
+
+    let mut style = test_style();
+    style.icon_theme = dir.path().to_string_lossy().into_owned();
+    let mut notification = test_notification();
+    notification.desktop_entry = Some("some-app".into());
+
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+    let frame = paint_card(&style, &notification, &font).expect("paint");
+
+    let icon = computed.icon.expect("icon rect");
+    let x = (icon.x + icon.size / 2.0) as u32;
+    let y = (icon.y + icon.size / 2.0) as u32;
+    let px = pixel_bgra(&frame.data, frame.stride, x, y);
+    assert_ne!(
+        px, style.progress_bgra,
+        "expected the resolved app icon, not the placeholder"
+    );
+    assert_eq!(
+        (px[0], px[1], px[2], px[3]),
+        (0, 0, 255, 255),
+        "opaque red in BGRA order"
+    );
 }
 
 #[test]
