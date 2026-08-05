@@ -68,6 +68,12 @@ pub struct Icons {
     pub size: i32,
     pub position: IconPosition,
     pub theme: String,
+    #[serde(default = "default_icon_default_name")]
+    pub default: String,
+}
+
+fn default_icon_default_name() -> String {
+    "dialog-information".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

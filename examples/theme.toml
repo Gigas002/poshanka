@@ -39,6 +39,9 @@ size = 64
 position = "left"
 # XDG_ICON_THEME name or absolute root path
 theme = ""
+# icon-theme name shown when a notification sends no icon (or nothing else
+# resolves), tried before the plain placeholder square; empty disables it
+default = "dialog-information"
 
 [progress]
 # over, source

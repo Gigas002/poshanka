@@ -10,6 +10,13 @@
 //!    `CardStyle::icon_theme` (a theme name, or an absolute path to a theme
 //!    root), falling back to the `hicolor` theme and finally the flat
 //!    `/usr/share/pixmaps` directory.
+//! 4. `desktop_entry` / `app_id` — when the notification carries no icon at
+//!    all, or the above all fail to resolve, the notification's own app icon
+//!    is looked up by that name using the same icon-theme search as step 3.
+//! 5. `dialog-information` — the freedesktop icon-naming-spec generic status
+//!    icon, guaranteed by any compliant theme. Only if even this fails to
+//!    resolve does rendering fall back to a plain accent-colored placeholder
+//!    square.
 //!
 //! Rendering:
 //! - PNG is decoded directly by `cairo::ImageSurface::create_from_png` and

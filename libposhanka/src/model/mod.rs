@@ -49,7 +49,7 @@ pub struct CardStyle {
     pub icon_size: i32,
     pub icon_position: IconPos,
     pub icon_theme: String,
-    // progress
+    pub icon_default_name: String,
     pub progress_mode: ProgressMode,
     /// Bar thickness in pixels; `0` disables the bar even when a notification
     /// carries a `progress` value.
