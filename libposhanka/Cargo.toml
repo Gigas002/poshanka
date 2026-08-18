@@ -12,7 +12,7 @@ default = []
 icons = ["dep:resvg", "dep:base64-ng"]
 
 [dependencies]
-base64-ng = { version = "1", optional = true }
+base64-ng = { version = "2", optional = true }
 cairo-rs = { version = "0.22", default-features = false, features = ["png"] }
 pango = { version = "0.22", features = ["v1_42"] }
 pangocairo = "0.22"
