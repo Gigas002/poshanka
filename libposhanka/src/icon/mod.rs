@@ -347,7 +347,9 @@ fn rgba_to_argb_surface(
             let src = &rgba[row * row_bytes..row * row_bytes + row_bytes];
             let dst_start = row * stride as usize;
             let dst = &mut data[dst_start..dst_start + row_bytes];
-            for (px_src, px_dst) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+            let (src_chunks, _) = src.as_chunks::<4>();
+            let (dst_chunks, _) = dst.as_chunks_mut::<4>();
+            for (px_src, px_dst) in src_chunks.iter().zip(dst_chunks.iter_mut()) {
                 let (r, g, b, a) = (px_src[0], px_src[1], px_src[2], px_src[3]);
                 px_dst[0] = b;
                 px_dst[1] = g;
