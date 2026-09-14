@@ -93,9 +93,9 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64-ng"
-version = "2.0.3"
+version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de9ffc17cca7788889a3782a727359ab907711f425f74af63cc2af61e704422e"
+checksum = "9fbc418b9e6eeb4b11cf02aa4710dc3e1e61f826a310294618fd979151f51509"
 
 [[package]]
 name = "bitflags"
