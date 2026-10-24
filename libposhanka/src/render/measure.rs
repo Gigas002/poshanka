@@ -1,5 +1,5 @@
 use crate::error::PoshankaError;
-use crate::model::{CardStyle, IconPos, IconRef, NotificationView, TextAlign};
+use crate::model::{CardStyle, IconPos, IconRef, NotificationView};
 
 use super::font::FontContext;
 use super::template::apply_template;
@@ -283,13 +283,5 @@ fn text_region(
             };
             (origin_x, origin_y, inner_w, text_h, Some(icon))
         }
-    }
-}
-
-pub fn text_align_to_pango(align: &TextAlign) -> pango::Alignment {
-    match align {
-        TextAlign::Left => pango::Alignment::Left,
-        TextAlign::Center => pango::Alignment::Center,
-        TextAlign::Right => pango::Alignment::Right,
     }
 }

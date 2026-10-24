@@ -2,7 +2,7 @@ use tempfile::tempdir;
 
 use crate::model::{IconRef, RawIconData};
 
-use super::{load_icon_surface, load_icon_surface_from_raw, resolve_icon_path};
+use super::{load_icon_pixmap, load_icon_pixmap_from_raw, resolve_icon_path};
 
 fn write_test_svg(path: &std::path::Path) {
     let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="20"><rect width="10" height="20" fill="#ff0000"/></svg>"##;
@@ -10,14 +10,16 @@ fn write_test_svg(path: &std::path::Path) {
 }
 
 fn write_test_png(path: &std::path::Path) {
-    let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 12, 12).unwrap();
-    {
-        let cr = cairo::Context::new(&surface).unwrap();
-        cr.set_source_rgba(1.0, 0.0, 0.0, 1.0);
-        cr.paint().unwrap();
+    let mut pixmap = vello_cpu::Pixmap::new(12, 12);
+    for px in pixmap.data_mut() {
+        *px = vello_cpu::color::PremulRgba8 {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255,
+        };
     }
-    let mut file = std::fs::File::create(path).unwrap();
-    surface.write_to_png(&mut file).unwrap();
+    std::fs::write(path, pixmap.into_png().unwrap()).unwrap();
 }
 
 #[test]
@@ -90,25 +92,29 @@ fn resolve_icon_path_returns_none_without_name_or_path() {
 }
 
 #[test]
-fn load_icon_surface_rasterizes_svg_to_requested_size() {
+fn load_icon_pixmap_rasterizes_svg_to_requested_size() {
     let dir = tempdir().unwrap();
     let icon_path = dir.path().join("bell.svg");
     write_test_svg(&icon_path);
 
-    let surface = load_icon_surface(&icon_path, 32).expect("svg should rasterize");
-    assert_eq!(surface.width(), 32);
-    assert_eq!(surface.height(), 32);
+    let pixmap = load_icon_pixmap(&icon_path, 32).expect("svg should rasterize");
+    assert_eq!((pixmap.width(), pixmap.height()), (32, 32));
+    // 10x20 source fitted into 32x32: centered column is red, edges transparent.
+    let center = pixmap.sample(16, 16);
+    assert_eq!((center.r, center.a), (255, 255));
+    assert_eq!(pixmap.sample(1, 16).a, 0);
 }
 
 #[test]
-fn load_icon_surface_decodes_png_and_scales() {
+fn load_icon_pixmap_decodes_png_and_scales() {
     let dir = tempdir().unwrap();
     let icon_path = dir.path().join("bell.png");
     write_test_png(&icon_path);
 
-    let surface = load_icon_surface(&icon_path, 32).expect("png should decode");
-    assert_eq!(surface.width(), 32);
-    assert_eq!(surface.height(), 32);
+    let pixmap = load_icon_pixmap(&icon_path, 32).expect("png should decode");
+    assert_eq!((pixmap.width(), pixmap.height()), (32, 32));
+    let center = pixmap.sample(16, 16);
+    assert_eq!((center.r, center.g, center.b, center.a), (255, 0, 0, 255));
 }
 
 fn raw_icon(width: i32, height: i32, has_alpha: bool, pixels: &[u8]) -> RawIconData {
@@ -125,32 +131,30 @@ fn raw_icon(width: i32, height: i32, has_alpha: bool, pixels: &[u8]) -> RawIconD
 }
 
 #[test]
-fn load_icon_surface_from_raw_decodes_and_scales() {
+fn load_icon_pixmap_from_raw_decodes_and_scales() {
     // 2x1 opaque red RGBA.
     let raw = raw_icon(2, 1, true, &[255, 0, 0, 255, 255, 0, 0, 255]);
-    let surface = load_icon_surface_from_raw(&raw, 8).expect("raw icon should decode");
-    assert_eq!(surface.width(), 8);
-    assert_eq!(surface.height(), 8);
+    let pixmap = load_icon_pixmap_from_raw(&raw, 8).expect("raw icon should decode");
+    assert_eq!((pixmap.width(), pixmap.height()), (8, 8));
 }
 
 #[test]
-fn load_icon_surface_from_raw_premultiplies_alpha() {
+fn load_icon_pixmap_from_raw_premultiplies_alpha() {
     // Single half-transparent red pixel: straight R=200, A=128.
     let raw = raw_icon(1, 1, true, &[200, 0, 0, 128]);
-    let mut surface = load_icon_surface_from_raw(&raw, 1).expect("raw icon should decode");
-    let data = surface.data().unwrap();
-    // BGRA order; premultiplied red ~= 200 * 128 / 255 = 100.
-    let px = &data[0..4];
-    assert_eq!(px[3], 128, "alpha byte unchanged");
+    let pixmap = load_icon_pixmap_from_raw(&raw, 1).expect("raw icon should decode");
+    // Premultiplied red ~= 200 * 128 / 255 = 100.
+    let px = pixmap.sample(0, 0);
+    assert_eq!(px.a, 128, "alpha unchanged");
     assert!(
-        (95..=105).contains(&px[2]),
+        (95..=105).contains(&px.r),
         "red channel should be premultiplied by alpha, got {}",
-        px[2]
+        px.r
     );
 }
 
 #[test]
-fn load_icon_surface_from_raw_respects_rowstride_padding() {
+fn load_icon_pixmap_from_raw_respects_rowstride_padding() {
     // 2x2 opaque RGB (3 channels) with 2 bytes of row padding beyond
     // width*channels on each row. Target size matches native size exactly so
     // no scaling/interpolation is involved — pixel values must be exact.
@@ -163,23 +167,19 @@ fn load_icon_surface_from_raw_respects_rowstride_padding() {
     ];
     raw.data_base64 = base64_ng::encode(&pixels).unwrap();
 
-    let mut surface = load_icon_surface_from_raw(&raw, 2).expect("raw icon should decode");
-    assert_eq!((surface.width(), surface.height()), (2, 2));
-    let stride = surface.stride() as usize;
-    let data = surface.data().unwrap();
-    // Pixel (x=1, y=0) in the destination BGRA surface (4 bytes/px there
-    // regardless of the 3-channel source) — should be blue, not padding
-    // bytes misread as a pixel.
-    let px1 = &data[4..8];
-    assert_eq!((px1[0], px1[1], px1[2], px1[3]), (255, 0, 0, 255));
+    let pixmap = load_icon_pixmap_from_raw(&raw, 2).expect("raw icon should decode");
+    assert_eq!((pixmap.width(), pixmap.height()), (2, 2));
+    // Pixel (x=1, y=0) — should be blue, not padding bytes misread as a pixel.
+    let px1 = pixmap.sample(1, 0);
+    assert_eq!((px1.r, px1.g, px1.b, px1.a), (0, 0, 255, 255));
     // Pixel (x=0, y=1) — confirms the second row is read starting at
     // `rowstride`, not `width * channels`.
-    let px2 = &data[stride..stride + 4];
-    assert_eq!((px2[0], px2[1], px2[2], px2[3]), (0, 0, 255, 255));
+    let px2 = pixmap.sample(0, 1);
+    assert_eq!((px2.r, px2.g, px2.b, px2.a), (255, 0, 0, 255));
 }
 
 #[test]
-fn load_icon_surface_from_raw_rejects_invalid_dimensions() {
+fn load_icon_pixmap_from_raw_rejects_invalid_dimensions() {
     let raw = raw_icon(0, 0, true, &[]);
-    assert!(load_icon_surface_from_raw(&raw, 8).is_err());
+    assert!(load_icon_pixmap_from_raw(&raw, 8).is_err());
 }

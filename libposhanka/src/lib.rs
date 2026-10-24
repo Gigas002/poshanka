@@ -15,7 +15,7 @@ pub use feed::{
     ProviderSpec, activate, close, fetch_list, input, parse_line, run_command, spawn_feed_exec,
 };
 #[cfg(feature = "icons")]
-pub use icon::{load_icon_surface, load_icon_surface_from_raw, resolve_icon_path};
+pub use icon::{load_icon_pixmap, load_icon_pixmap_from_raw, resolve_icon_path};
 pub use model::{
     CardStyle, IconPos, IconRef, NotificationView, ProgressMode, RawIconData, SubscriberSpec,
     TextAlign, Urgency,

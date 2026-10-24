@@ -22,8 +22,8 @@ pub fn pango_escape(s: &str) -> String {
 /// The sender is responsible for well-formed Pango markup once
 /// `body_markup` is negotiated (notred's `[notifications].body_markup`
 /// capability); malformed markup falls back to escaped plain text rather
-/// than failing the whole card, since Pango would otherwise reject the
-/// entire layout for one bad tag.
+/// than failing the whole card, since the markup parser would otherwise
+/// reject the entire block for one bad tag.
 fn body_markup_or_escaped(body: &str, body_markup: bool) -> String {
     if !body_markup {
         return pango_escape(body);
@@ -31,7 +31,7 @@ fn body_markup_or_escaped(body: &str, body_markup: bool) -> String {
     // Validate in isolation (wrapped in a throwaway root element) — `body`
     // is substituted into a larger template that may add its own tags
     // around it, so this only checks that `body` itself is well-formed.
-    match pango::parse_markup(&format!("<span>{body}</span>"), '\0') {
+    match super::markup::validate(&format!("<span>{body}</span>")) {
         Ok(_) => body.to_string(),
         Err(_) => pango_escape(body),
     }
