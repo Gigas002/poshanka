@@ -7,6 +7,6 @@ edition = "2024"
 license = "GPL-3.0-only"
 homepage = "https://github.com/Gigas002/poshanka"
 description = "Wayland popup subscriber for notred"
-keywords = ["wayland", "notifications", "notred", "pango", "cairo", "mako"]
+keywords = ["wayland", "notifications", "notred", "vello", "parley", "mako"]
 repository = "https://github.com/Gigas002/poshanka"
 version = "0.1.0"

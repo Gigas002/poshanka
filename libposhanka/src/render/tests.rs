@@ -111,7 +111,7 @@ fn painted_card_has_foreground_text_pixel() {
     let block = &computed.blocks[0];
     let x = (block.x + 4.0) as u32;
     // Vertical middle of the line box, not a fixed offset from its top —
-    // robust to how much Pango leading/ascent sits above the glyph ink,
+    // robust to how much line leading/ascent sits above the glyph ink,
     // which shifts as `block.y` moves with vertical centering.
     let y = (block.y + block.height / 2.0) as u32;
     let px = pixel_bgra(
@@ -383,4 +383,146 @@ fn body_falls_back_to_escaped_when_body_markup_is_malformed() {
     let font = FontContext::new(&style.font_name, style.font_size).expect("font");
     let computed = measure_card(&style, &notification, &font).expect("measure");
     assert!(computed.blocks[1].markup.contains("&lt;b&gt;"));
+}
+
+#[test]
+fn markup_parses_nested_tags_and_entities() {
+    use super::markup::{Attr, FontSlant, parse};
+
+    let rich = parse("a <b>b<i>c</i></b> &amp; &#x41;", 10.0).expect("valid markup");
+    assert_eq!(rich.text, "a bc & A");
+    assert_eq!(rich.spans.len(), 2);
+    assert_eq!(rich.spans[0].attr, Attr::Weight(700.0));
+    assert_eq!(rich.spans[0].range, 2..4);
+    assert_eq!(rich.spans[1].attr, Attr::Slant(FontSlant::Italic));
+    assert_eq!(rich.spans[1].range, 3..4);
+}
+
+#[test]
+fn markup_resolves_span_attributes() {
+    use super::markup::{Attr, TextBrush, parse};
+
+    let rich = parse(
+        r##"<span foreground="#ff8000" size="larger" weight="bold" underline="single">x</span>"##,
+        10.0,
+    )
+    .expect("valid markup");
+    assert!(rich.spans.contains(&super::markup::Span {
+        range: 0..1,
+        attr: Attr::Brush(TextBrush {
+            rgb: Some([0xff, 0x80, 0x00]),
+            alpha: None,
+        }),
+    }));
+    assert!(rich.spans.iter().any(|s| s.attr == Attr::Size(12.0)));
+    assert!(rich.spans.iter().any(|s| s.attr == Attr::Weight(700.0)));
+    assert!(rich.spans.iter().any(|s| s.attr == Attr::Underline(true)));
+}
+
+#[test]
+fn markup_rejects_malformed_input() {
+    use super::markup::validate;
+
+    assert!(validate("<b>unclosed").is_err());
+    assert!(validate("<b><i>x</b></i>").is_err());
+    assert!(validate("</b>").is_err());
+    assert!(validate("<blink>x</blink>").is_err());
+    assert!(validate("fish &chips").is_err());
+    assert!(validate("<span unknown_attr='1'>ok</span>").is_ok());
+}
+
+#[test]
+fn font_desc_splits_family_style_and_size() {
+    use super::markup::{FontDesc, FontSlant};
+
+    let desc = FontDesc::parse("Noto Sans, Symbols Nerd Font Bold Italic 12");
+    assert_eq!(desc.family.as_deref(), Some("Noto Sans, Symbols Nerd Font"));
+    assert_eq!(desc.weight, Some(700.0));
+    assert_eq!(desc.slant, Some(FontSlant::Italic));
+    assert_eq!(desc.size_pt, Some(12.0));
+
+    assert_eq!(
+        FontDesc::parse("monospace").family.as_deref(),
+        Some("monospace")
+    );
+}
+
+#[test]
+fn long_text_is_ellipsized_to_max_height() {
+    let style = test_style();
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let text = "word ".repeat(200);
+    let (_, one_line) = font.measure_markup("x", 200.0, None);
+    let (_, full) = font.measure_markup(&text, 200.0, None);
+    assert!(
+        full > one_line * 3.0,
+        "unbounded text should wrap to many lines"
+    );
+
+    let max_h = one_line * 2.5;
+    let (_, clipped) = font.measure_markup(&text, 200.0, Some(max_h));
+    assert!(clipped <= max_h, "clipped height {clipped} exceeds {max_h}");
+    assert!(
+        clipped >= one_line * 1.5,
+        "two whole lines should still fit"
+    );
+
+    let layout = font.layout_markup(&text, 200.0, Some(max_h), &TextAlign::Left);
+    assert_eq!(layout.len(), 2, "only the lines that fit are kept");
+}
+
+#[test]
+fn ellipsized_text_keeps_at_least_one_line() {
+    let style = test_style();
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let (_, one_line) = font.measure_markup("x", 200.0, None);
+    let (_, clipped) = font.measure_markup(&"word ".repeat(50), 200.0, Some(1.0));
+    assert!((clipped - one_line).abs() < 0.5);
+}
+
+#[test]
+fn progress_source_mode_replaces_background() {
+    let mut style = test_style();
+    style.progress_mode = ProgressMode::Source;
+    style.progress_bgra = [0x00, 0x00, 0x80, 0x80]; // half-transparent red, straight alpha
+    let mut notification = test_notification();
+    notification.progress = Some(100);
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let computed = measure_card(&style, &notification, &font).expect("measure");
+    let frame = paint_card(&style, &notification, &font).expect("paint");
+
+    let progress = computed.progress.expect("progress rect");
+    let x = (progress.x + 4.0) as u32;
+    let y = (progress.y + progress.height / 2.0) as u32;
+    let [b, g, r, a] = pixel_bgra(&frame.data, frame.stride, x, y);
+    // Premultiplied, and the opaque background must not show through.
+    assert_eq!((b, g, a), (0, 0, 0x80));
+    assert!((0x3f..=0x41).contains(&r), "premultiplied red, got {r:#x}");
+}
+
+#[test]
+#[cfg(feature = "icons")] // PNG encoding comes with `vello_cpu/png`
+#[ignore = "writes a preview PNG for manual inspection"]
+fn dump_preview_png() {
+    let mut style = test_style();
+    style.height = 200;
+    let mut notification = test_notification();
+    notification.summary = "Build finished — 100% ✓".into();
+    notification.body = "<i>italic</i>, <b>bold</b>, <u>underlined</u>, <s>struck</s>, <tt>mono</tt>, <span foreground='#ffaa00' size='larger'>big orange</span> H<sub>2</sub>O x<sup>2</sup> and a long tail of text that should wrap and eventually be cut off with an ellipsis once it runs past the maximum card height configured in the theme for this card".into();
+    notification.body_markup = true;
+    notification.progress = Some(60);
+    let font = FontContext::new(&style.font_name, style.font_size).expect("font");
+    let frame = paint_card(&style, &notification, &font).expect("paint");
+    let mut rgba = frame.data.clone();
+    for px in rgba.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
+    }
+    let pixmap = vello_cpu::Pixmap::from_parts(
+        rgba,
+        frame.width as u16,
+        frame.height as u16,
+        vello_cpu::PixelMetadata::default(),
+    );
+    let out = std::env::var("POSHANKA_PREVIEW").unwrap_or_else(|_| "preview.png".into());
+    std::fs::write(out, pixmap.into_png().unwrap()).unwrap();
 }

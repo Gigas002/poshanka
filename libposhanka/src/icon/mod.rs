@@ -1,5 +1,5 @@
 //! Icon resolution and rasterization: `icon.name` / `icon.path` / raw pixel
-//! data → Cairo surface.
+//! data → `vello_cpu` [`Pixmap`].
 //!
 //! Resolution order (see [`crate::render::paint_card`]):
 //! 1. `icon.raw` — decoded directly from the embedded pixel buffer (FDN
@@ -18,18 +18,22 @@
 //!    resolve does rendering fall back to a plain accent-colored placeholder
 //!    square.
 //!
-//! Rendering:
-//! - PNG is decoded directly by `cairo::ImageSurface::create_from_png` and
-//!   scaled to the target size if needed.
+//! Rendering (all results are premultiplied RGBA pixmaps):
+//! - PNG is decoded by `Pixmap::from_png` and scaled to the target size with
+//!   `vello_cpu` if needed.
 //! - SVG is parsed and rasterized by `resvg` (pure-Rust, actively maintained)
-//!   into a premultiplied RGBA buffer, then copied into a Cairo `ImageSurface`.
+//!   straight into a premultiplied RGBA buffer.
 //! - Raw pixel data (straight, non-premultiplied alpha, row length
-//!   `rowstride` which may exceed `width * channels`) is premultiplied and
-//!   copied into a Cairo `ImageSurface`, then scaled to the target size.
+//!   `rowstride` which may exceed `width * channels`) is premultiplied into a
+//!   pixmap, then scaled to the target size.
 
 use std::path::{Path, PathBuf};
 
-use cairo::{Context, Format, ImageSurface};
+use std::sync::Arc;
+
+use vello_cpu::kurbo::{Affine, Rect};
+use vello_cpu::peniko::{ImageQuality, ImageSampler};
+use vello_cpu::{Image, ImageSource, PixelMetadata, Pixmap, RenderContext, Resources};
 
 use crate::error::PoshankaError;
 use crate::model::{IconRef, RawIconData};
@@ -182,101 +186,82 @@ fn find_in_theme_root(root: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Load an icon file (PNG or SVG) and rasterize it into a square Cairo
-/// `ImageSurface` of `size` × `size` pixels, preserving aspect ratio and
-/// centering the result.
-pub fn load_icon_surface(path: &Path, size: u32) -> Result<ImageSurface, PoshankaError> {
+/// Load an icon file (PNG or SVG) and rasterize it into a square
+/// `size` × `size` pixmap, preserving aspect ratio and centering the result.
+pub fn load_icon_pixmap(path: &Path, size: u32) -> Result<Pixmap, PoshankaError> {
     let is_svg = path
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("svg"));
 
     if is_svg {
-        load_svg_surface(path, size)
+        load_svg_pixmap(path, size)
     } else {
-        load_raster_surface(path, size)
+        load_raster_pixmap(path, size)
     }
 }
 
 /// Decode raw FDN `image-data` pixel bytes (straight alpha, RGB(A), rowstride
-/// possibly padded beyond `width * channels`) into a square Cairo
-/// `ImageSurface` of `size` × `size` pixels, preserving aspect ratio and
-/// centering the result.
-pub fn load_icon_surface_from_raw(
-    raw: &RawIconData,
-    size: u32,
-) -> Result<ImageSurface, PoshankaError> {
+/// possibly padded beyond `width * channels`) into a square `size` × `size`
+/// pixmap, preserving aspect ratio and centering the result.
+pub fn load_icon_pixmap_from_raw(raw: &RawIconData, size: u32) -> Result<Pixmap, PoshankaError> {
     if raw.width <= 0 || raw.height <= 0 {
         return Err(PoshankaError::Render("invalid raw icon dimensions".into()));
     }
     let data = base64_ng::decode(&raw.data_base64)
         .map_err(|e| PoshankaError::Render(format!("raw icon base64: {e}")))?;
 
-    let source = raw_pixels_to_argb_surface(raw, &data)?;
-    let (src_w, src_h) = (source.width(), source.height());
-    if src_w == size as i32 && src_h == size as i32 {
-        return Ok(source);
-    }
-    scale_surface(&source, src_w, src_h, size)
+    fit_to_square(raw_pixels_to_pixmap(raw, &data)?, size)
 }
 
 /// Convert straight-alpha, row-padded RGB(A) pixel bytes (FDN `image-data`
-/// shape) into a premultiplied Cairo `Format::ARgb32` surface.
-fn raw_pixels_to_argb_surface(
-    raw: &RawIconData,
-    data: &[u8],
-) -> Result<ImageSurface, PoshankaError> {
-    let (width, height) = (raw.width, raw.height);
+/// shape) into a premultiplied RGBA pixmap.
+fn raw_pixels_to_pixmap(raw: &RawIconData, data: &[u8]) -> Result<Pixmap, PoshankaError> {
+    let (width, height) = (pixmap_dim(raw.width)?, pixmap_dim(raw.height)?);
     let channels = raw.channels.max(1) as usize;
     let rowstride = raw.rowstride.max(0) as usize;
     let has_alpha = raw.has_alpha && channels >= 4;
 
-    let mut surface = ImageSurface::create(Format::ARgb32, width, height)
-        .map_err(|e| PoshankaError::Render(format!("icon surface: {e}")))?;
-    let stride = surface.stride() as usize;
-
-    {
-        let mut dst = surface
-            .data()
-            .map_err(|e| PoshankaError::Render(format!("icon surface data: {e}")))?;
-        for y in 0..height as usize {
-            let src_row = y * rowstride;
-            let dst_row = y * stride;
-            for x in 0..width as usize {
-                let src_px = src_row + x * channels;
-                if src_px + channels > data.len() {
-                    continue; // truncated/malformed row; leave transparent
-                }
-                let (r, g, b) = (data[src_px], data[src_px + 1], data[src_px + 2]);
-                let a = if has_alpha { data[src_px + 3] } else { 255 };
-                let premultiply = |c: u8| (u16::from(c) * u16::from(a) / 255) as u8;
-
-                let dst_px = dst_row + x * 4;
-                dst[dst_px] = premultiply(b);
-                dst[dst_px + 1] = premultiply(g);
-                dst[dst_px + 2] = premultiply(r);
-                dst[dst_px + 3] = a;
+    let row_bytes = usize::from(width) * 4;
+    let mut rgba = vec![0u8; row_bytes * usize::from(height)];
+    for y in 0..usize::from(height) {
+        let src_row = y * rowstride;
+        for x in 0..usize::from(width) {
+            let src_px = src_row + x * channels;
+            if src_px + channels > data.len() {
+                continue; // truncated/malformed row; leave transparent
             }
+            let (r, g, b) = (data[src_px], data[src_px + 1], data[src_px + 2]);
+            let a = if has_alpha { data[src_px + 3] } else { 255 };
+            let premultiply = |c: u8| (u16::from(c) * u16::from(a) / 255) as u8;
+
+            let dst_px = y * row_bytes + x * 4;
+            rgba[dst_px..dst_px + 4].copy_from_slice(&[
+                premultiply(r),
+                premultiply(g),
+                premultiply(b),
+                a,
+            ]);
         }
     }
 
-    Ok(surface)
+    Ok(Pixmap::from_parts(
+        rgba,
+        width,
+        height,
+        PixelMetadata::default(),
+    ))
 }
 
-fn load_raster_surface(path: &Path, size: u32) -> Result<ImageSurface, PoshankaError> {
-    let mut file = std::fs::File::open(path)
+fn load_raster_pixmap(path: &Path, size: u32) -> Result<Pixmap, PoshankaError> {
+    let file = std::fs::File::open(path)
         .map_err(|e| PoshankaError::Render(format!("open icon {}: {e}", path.display())))?;
-    let source = ImageSurface::create_from_png(&mut file)
+    let source = Pixmap::from_png(std::io::BufReader::new(file))
         .map_err(|e| PoshankaError::Render(format!("decode icon {}: {e}", path.display())))?;
-
-    let (src_w, src_h) = (source.width(), source.height());
-    if src_w == size as i32 && src_h == size as i32 {
-        return Ok(source);
-    }
-    scale_surface(&source, src_w, src_h, size)
+    fit_to_square(source, size)
 }
 
-fn load_svg_surface(path: &Path, size: u32) -> Result<ImageSurface, PoshankaError> {
+fn load_svg_pixmap(path: &Path, size: u32) -> Result<Pixmap, PoshankaError> {
     let data = std::fs::read(path)
         .map_err(|e| PoshankaError::Render(format!("read icon {}: {e}", path.display())))?;
 
@@ -286,80 +271,62 @@ fn load_svg_surface(path: &Path, size: u32) -> Result<ImageSurface, PoshankaErro
 
     let tree_size = tree.size();
     let (tw, th) = (tree_size.width().max(1.0), tree_size.height().max(1.0));
-    let target = size.max(1);
-    let scale = (target as f32 / tw).min(target as f32 / th);
-    let dx = (target as f32 - tw * scale) / 2.0;
-    let dy = (target as f32 - th * scale) / 2.0;
+    let target = pixmap_dim(size.max(1))?;
+    let scale = (f32::from(target) / tw).min(f32::from(target) / th);
+    let dx = (f32::from(target) - tw * scale) / 2.0;
+    let dy = (f32::from(target) - th * scale) / 2.0;
     let transform = resvg::tiny_skia::Transform::from_scale(scale, scale).post_translate(dx, dy);
 
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(target, target)
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(u32::from(target), u32::from(target))
         .ok_or_else(|| PoshankaError::Render("icon pixmap allocation failed".into()))?;
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-    rgba_to_argb_surface(pixmap.data(), target, target)
+    // tiny-skia already stores premultiplied RGBA, the same layout vello_cpu uses.
+    Ok(Pixmap::from_parts(
+        pixmap.take(),
+        target,
+        target,
+        PixelMetadata::default(),
+    ))
 }
 
-/// Scale an existing (PNG-decoded) `ImageSurface` into a new `size` × `size`
-/// surface, preserving aspect ratio and centering.
-fn scale_surface(
-    source: &ImageSurface,
-    src_w: i32,
-    src_h: i32,
-    size: u32,
-) -> Result<ImageSurface, PoshankaError> {
-    let target = ImageSurface::create(Format::ARgb32, size as i32, size as i32)
-        .map_err(|e| PoshankaError::Render(format!("icon surface: {e}")))?;
-    let cr =
-        Context::new(&target).map_err(|e| PoshankaError::Render(format!("icon context: {e}")))?;
-
-    let scale = (f64::from(size) / f64::from(src_w)).min(f64::from(size) / f64::from(src_h));
-    let dx = (f64::from(size) - f64::from(src_w) * scale) / 2.0;
-    let dy = (f64::from(size) - f64::from(src_h) * scale) / 2.0;
-
-    cr.translate(dx, dy);
-    cr.scale(scale, scale);
-    cr.set_source_surface(source, 0.0, 0.0)
-        .map_err(|e| PoshankaError::Render(format!("icon source: {e}")))?;
-    cr.paint()
-        .map_err(|e| PoshankaError::Render(format!("icon paint: {e}")))?;
-
-    Ok(target)
-}
-
-/// Convert a premultiplied RGBA (tiny-skia, byte order R,G,B,A) buffer into a
-/// Cairo `Format::ARgb32` surface (premultiplied, native-endian 32-bit ARGB,
-/// i.e. B,G,R,A byte order on little-endian hosts).
-fn rgba_to_argb_surface(
-    rgba: &[u8],
-    width: u32,
-    height: u32,
-) -> Result<ImageSurface, PoshankaError> {
-    let mut surface = ImageSurface::create(Format::ARgb32, width as i32, height as i32)
-        .map_err(|e| PoshankaError::Render(format!("icon surface: {e}")))?;
-    let stride = surface.stride();
-    let row_bytes = (width * 4) as usize;
-
-    {
-        let mut data = surface
-            .data()
-            .map_err(|e| PoshankaError::Render(format!("icon surface data: {e}")))?;
-        for row in 0..height as usize {
-            let src = &rgba[row * row_bytes..row * row_bytes + row_bytes];
-            let dst_start = row * stride as usize;
-            let dst = &mut data[dst_start..dst_start + row_bytes];
-            let (src_chunks, _) = src.as_chunks::<4>();
-            let (dst_chunks, _) = dst.as_chunks_mut::<4>();
-            for (px_src, px_dst) in src_chunks.iter().zip(dst_chunks.iter_mut()) {
-                let (r, g, b, a) = (px_src[0], px_src[1], px_src[2], px_src[3]);
-                px_dst[0] = b;
-                px_dst[1] = g;
-                px_dst[2] = r;
-                px_dst[3] = a;
-            }
-        }
+/// Scale `source` into a new `size` × `size` pixmap, preserving aspect ratio
+/// and centering. Returns `source` unchanged if it already has that size.
+fn fit_to_square(source: Pixmap, size: u32) -> Result<Pixmap, PoshankaError> {
+    let target = pixmap_dim(size.max(1))?;
+    let (src_w, src_h) = (source.width(), source.height());
+    if src_w == target && src_h == target {
+        return Ok(source);
     }
 
-    Ok(surface)
+    let (src_w, src_h) = (f64::from(src_w), f64::from(src_h));
+    let side = f64::from(target);
+    let scale = (side / src_w).min(side / src_h);
+    let dx = (side - src_w * scale) / 2.0;
+    let dy = (side - src_h * scale) / 2.0;
+
+    let mut ctx = RenderContext::new(target, target);
+    let mut resources = Resources::new();
+    ctx.set_paint(Image {
+        image: ImageSource::Pixmap(Arc::new(source)),
+        sampler: ImageSampler {
+            quality: ImageQuality::High,
+            ..ImageSampler::default()
+        },
+    });
+    ctx.set_paint_transform(Affine::translate((dx, dy)) * Affine::scale(scale));
+    ctx.fill_rect(&Rect::new(dx, dy, dx + src_w * scale, dy + src_h * scale));
+
+    let mut out = Pixmap::new(target, target);
+    ctx.flush();
+    ctx.render(&mut out, &mut resources);
+    Ok(out)
+}
+
+fn pixmap_dim(value: impl TryInto<u16>) -> Result<u16, PoshankaError> {
+    value
+        .try_into()
+        .map_err(|_| PoshankaError::Render("icon dimensions exceed renderer limits".into()))
 }
 
 #[cfg(test)]
