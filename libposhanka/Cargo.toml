@@ -21,6 +21,6 @@ serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 tracing = "0.1"
-vello_cpu = { version = "0.3", default-features = false, features = ["std", "text", "u8_pipeline"] }
+vello_cpu = { version = "0.4", default-features = false, features = ["std", "text", "u8_pipeline"] }
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
