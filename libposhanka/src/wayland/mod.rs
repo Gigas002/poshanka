@@ -617,7 +617,8 @@ impl AppState {
 enum ProviderAction {
     /// Layer B whole-card shortcut: dismiss a notification without actions.
     Close(u32),
-    /// Layer B whole-card shortcut: run the default action.
+    /// Layer B whole-card shortcut: `activate` without a key. notred runs the
+    /// `default` action, or dismisses a notification that offers none.
     Activate(u32),
     /// Layer A gesture report: `button_left` | `button_middle` | `button_right` | `touch`.
     Input(u32, &'static str),

@@ -25,3 +25,8 @@ When notred reloads (`notredctl reload`), poshanka re-reads its theme and overri
 Keys poshanka doesn't know are logged as warnings when the files are read (at start-up and on reload), so a misspelled key shows up in the log instead of silently doing nothing.
 
 Start from the reference files under `examples/`: copy `examples/config.toml`, `examples/theme.toml`, and (optionally) `examples/apps/`, `examples/urgency/`, and `examples/scripts/notred-subscribe.sh` into `$XDG_CONFIG_HOME/poshanka/`, adjusting `[provider].exec` if you relocate the subscribe script.
+
+## Clicking cards
+
+- **Left click:** a card without actions is closed (`notredctl close`); one with actions is activated (`notredctl activate`), which runs its `default` action. notred 0.2.0 and later dismiss a card that offers only named actions (a chat's "Reply", say) and close it after its action unless the sender marked it resident; older notred reports an error for such cards and leaves them open.
+- **Right and middle click, touch:** reported to notred (`notredctl input`), which runs your `[events]` hook for that gesture or, without one, dismisses the card.
