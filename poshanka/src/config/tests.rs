@@ -214,3 +214,62 @@ fn no_xdg_no_home_falls_back_to_dot_config() {
     let dir = config_dir_from_env(None::<&str>, None::<&str>);
     assert_eq!(dir, std::path::Path::new(".config/poshanka"));
 }
+
+#[test]
+fn unknown_keys_are_reported_with_their_path() {
+    let raw = r#"
+[paths]
+theme = "theme.toml"
+override = []
+
+[provider]
+exec = "x"
+
+[stack]
+gap = 10
+spacing = 3
+
+[placement]
+anchor = "top-right"
+margin = 0
+
+[layer]
+layer = "overlay"
+output = ""
+"#;
+    let (config, unknown): (super::Config, _) = super::parse_toml(raw).unwrap();
+    assert_eq!(config.stack.gap, 10);
+    assert_eq!(unknown, ["paths.override", "stack.spacing"]);
+}
+
+#[test]
+fn unknown_theme_keys_are_reported_in_fragments_too() {
+    let raw = "[colors]\nbackground = \"#000000ff\"\ntext = \"#ffffffff\"\n";
+    let (_, unknown): (crate::theme::FragmentTheme, _) = super::parse_toml(raw).unwrap();
+    assert_eq!(unknown, ["colors.text"]);
+}
+
+#[test]
+fn every_example_file_has_only_known_keys() {
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
+    let read = |rel: &str| std::fs::read_to_string(examples.join(rel)).unwrap();
+    let (_, unknown): (super::Config, _) = super::parse_toml(&read("config.toml")).unwrap();
+    assert!(unknown.is_empty(), "config.toml: {unknown:?}");
+    let (_, unknown): (crate::theme::Theme, _) = super::parse_toml(&read("theme.toml")).unwrap();
+    assert!(unknown.is_empty(), "theme.toml: {unknown:?}");
+    for fragment in [
+        "urgency/low",
+        "urgency/critical",
+        "apps/some_app",
+        "apps/some_app/urgency/low",
+        "category/email_arrived",
+        "desktop-entry/thunderbird",
+    ] {
+        let (_, unknown): (super::FragmentConfig, _) =
+            super::parse_toml(&read(&format!("{fragment}/config.toml"))).unwrap();
+        assert!(unknown.is_empty(), "{fragment}/config.toml: {unknown:?}");
+        let (_, unknown): (crate::theme::FragmentTheme, _) =
+            super::parse_toml(&read(&format!("{fragment}/theme.toml"))).unwrap();
+        assert!(unknown.is_empty(), "{fragment}/theme.toml: {unknown:?}");
+    }
+}

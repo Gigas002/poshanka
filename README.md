@@ -20,4 +20,6 @@ poshanka reads config from `$XDG_CONFIG_HOME/poshanka/` (falls back to `~/.confi
 | `theme.toml`       | Card look — font, colors, layout, Pango-markup templates (path from `[paths].theme`) |
 | override fragments | Per-app / per-urgency theme patches (paths from `[paths].overrides`)          |
 
+Keys poshanka doesn't know are logged as warnings when the files are read (at start-up and on reload), so a misspelled key shows up in the log instead of silently doing nothing.
+
 Start from the reference files under `examples/`: copy `examples/config.toml`, `examples/theme.toml`, and (optionally) `examples/apps/`, `examples/urgency/`, and `examples/scripts/notred-subscribe.sh` into `$XDG_CONFIG_HOME/poshanka/`, adjusting `[provider].exec` if you relocate the subscribe script.

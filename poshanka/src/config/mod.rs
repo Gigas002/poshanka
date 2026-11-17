@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 /// Top-level config (`config.toml`).
 #[derive(Debug, Clone, Deserialize)]
@@ -109,23 +110,56 @@ pub struct FragmentPaths {
 
 impl Config {
     pub fn load(path: &Path) -> Result<Self, crate::error::Error> {
-        let raw = std::fs::read_to_string(path).map_err(|source| crate::error::Error::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        toml::from_str(&raw)
-            .map_err(|err| crate::error::Error::Config(format!("{}: {err}", path.display())))
+        read_toml(path, crate::error::Error::Config)
     }
 }
 
 impl FragmentConfig {
     pub fn load(path: &Path) -> Result<Self, crate::error::Error> {
-        let raw = std::fs::read_to_string(path).map_err(|source| crate::error::Error::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        toml::from_str(&raw)
-            .map_err(|err| crate::error::Error::Config(format!("{}: {err}", path.display())))
+        read_toml(path, crate::error::Error::Config)
+    }
+}
+
+/// Read and parse a TOML file, logging a warning for every key it has that
+/// `T` doesn't know (a typo would otherwise be silently ignored). Parse
+/// errors become `invalid`, prefixed with the path.
+pub(crate) fn read_toml<T: DeserializeOwned>(
+    path: &Path,
+    invalid: fn(String) -> crate::error::Error,
+) -> Result<T, crate::error::Error> {
+    let raw = std::fs::read_to_string(path).map_err(|source| crate::error::Error::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let (value, unknown) =
+        parse_toml(&raw).map_err(|err| invalid(format!("{}: {err}", path.display())))?;
+    for key in unknown {
+        tracing::warn!(path = %path.display(), key, "unknown key ignored");
+    }
+    Ok(value)
+}
+
+/// Parse `raw`, also returning the dotted paths of keys `T` doesn't know.
+pub(crate) fn parse_toml<T: DeserializeOwned>(raw: &str) -> Result<(T, Vec<String>), String> {
+    let mut unknown = Vec::new();
+    let value = toml::Deserializer::parse(raw)
+        .and_then(|de| serde_ignored::deserialize(de, |key| unknown.push(key_path(&key))))
+        .map_err(|err| err.to_string().trim_end().to_string())?;
+    Ok((value, unknown))
+}
+
+fn key_path(path: &serde_ignored::Path<'_>) -> String {
+    use serde_ignored::Path;
+    match path {
+        Path::Root => String::new(),
+        Path::Seq { parent, index } => format!("{}[{index}]", key_path(parent)),
+        Path::Map { parent, key } => match key_path(parent) {
+            p if p.is_empty() => key.clone(),
+            p => format!("{p}.{key}"),
+        },
+        Path::Some { parent }
+        | Path::NewtypeStruct { parent }
+        | Path::NewtypeVariant { parent } => key_path(parent),
     }
 }
 
