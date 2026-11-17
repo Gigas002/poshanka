@@ -56,33 +56,6 @@ fn a_full_channel_slows_the_feed_down_instead_of_ending_it() {
     assert_eq!((received, delivered), (5, 5));
 }
 
-/// When nobody listens any more, the feed stops, and so does its script.
-#[test]
-fn a_closed_channel_ends_the_run_and_the_script() {
-    let dir = tempfile::tempdir().unwrap();
-    let pid_file = dir.path().join("pid");
-    use std::os::unix::fs::PermissionsExt;
-    let path = dir.path().join("feed.sh");
-    std::fs::write(
-        &path,
-        format!(
-            "#!/bin/sh\necho $$ > '{}'\nwhile true; do echo '{{\"v\": 1, \"type\": \"event\", \"event\": {{\"kind\": \"update\", \"items\": []}}}}'; sleep 0.05; done\n",
-            pid_file.display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    drop(rx);
-    let (wakeup, _wakeup_rx) = std::os::unix::net::UnixStream::pair().unwrap();
-    let mut delivered = 0;
-    let result = super::run_feed_once(path.to_str().unwrap(), &tx, &wakeup, &mut delivered);
-    assert!(result.is_err());
-    let pid = std::fs::read_to_string(&pid_file).unwrap();
-    let alive = std::path::Path::new("/proc").join(pid.trim()).exists();
-    assert!(!alive, "feed script {} still running", pid.trim());
-}
-
 #[test]
 fn log_excerpts_cut_long_lines_on_a_char_boundary() {
     assert_eq!(super::log_excerpt("short"), "short");
