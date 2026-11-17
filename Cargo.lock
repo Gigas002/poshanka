@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "libposhanka"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64-ng",
  "parley",
@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "poshanka"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "libc",
