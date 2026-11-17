@@ -446,11 +446,27 @@ impl Poshanka {
     }
 
     pub fn start_with(sway: &Sway, config: &str, theme: &str, env: &[(&str, &str)]) -> Self {
+        Self::start_with_files(sway, config, theme, env, &[])
+    }
+
+    /// Like [`Self::start_with`], with more `(path, text)` files written into
+    /// the config directory first (override fragments).
+    pub fn start_with_files(
+        sway: &Sway,
+        config: &str,
+        theme: &str,
+        env: &[(&str, &str)],
+        files: &[(&str, &str)],
+    ) -> Self {
         let dir = tempfile::Builder::new()
             .prefix("psk-cfg")
             .tempdir()
             .unwrap();
         let p = |name: &str| dir.path().join(name);
+        for (name, text) in files {
+            std::fs::create_dir_all(p(name).parent().unwrap()).unwrap();
+            std::fs::write(p(name), text).unwrap();
+        }
         std::fs::write(
             p("config.toml"),
             config.replace("{dir}", dir.path().to_str().unwrap()),

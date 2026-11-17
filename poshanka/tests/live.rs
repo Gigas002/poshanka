@@ -255,3 +255,123 @@ fn the_feed_script_ends_with_poshanka() {
     poshanka.kill();
     common::wait_for("the feed script to end", || (!proc.exists()).then_some(()));
 }
+
+const RELOAD: &str = r#"{"v": 1, "type": "event", "event": {"kind": "reload"}}"#;
+
+#[test]
+fn a_reload_event_applies_the_changed_theme_and_keeps_a_broken_one_out() {
+    let sway = sway_or_skip!();
+    let mut poshanka = Poshanka::start(&sway);
+    poshanka.show(&[notification(1, "x", "")]);
+    common::wait_for_card(&sway, 0, true);
+
+    let theme = poshanka.path("theme.toml");
+    std::fs::write(&theme, common::THEME.replace("#204060ff", "#406020ff")).unwrap();
+    poshanka.send(RELOAD);
+    poshanka.wait_for_log("the reload", "reloaded poshanka config/theme");
+    poshanka.show(&[notification(1, "x", "")]);
+    let (x, y) = card_origin(0);
+    common::wait_for("the new background", || {
+        (sway
+            .screenshot(x, y, common::CARD_W, common::CARD_H)
+            .count([0x40, 0x60, 0x20])
+            > 0)
+        .then_some(())
+    });
+
+    std::fs::write(&theme, "[font]\nname = 3\n").unwrap();
+    poshanka.send(RELOAD);
+    poshanka.wait_for_log("the failed reload", "keeping previous settings");
+    poshanka.show(&[notification(1, "y", "")]);
+    common::wait_for("the kept background", || {
+        (sway
+            .screenshot(x, y, common::CARD_W, common::CARD_H)
+            .count([0x40, 0x60, 0x20])
+            > 0)
+        .then_some(())
+    });
+}
+
+#[test]
+fn urgency_overrides_change_the_card() {
+    let sway = sway_or_skip!();
+    let config = common::CONFIG.replace(
+        "theme = \"theme.toml\"",
+        "theme = \"theme.toml\"\noverrides = [\"critical/config.toml\"]",
+    );
+    let mut poshanka = Poshanka::start_with_files(
+        &sway,
+        &config,
+        common::THEME,
+        &[],
+        &[
+            (
+                "critical/config.toml",
+                "[override]\ntype = \"urgency\"\nlevel = \"critical\"\n[paths]\ntheme = \"theme.toml\"\n",
+            ),
+            (
+                "critical/theme.toml",
+                "[colors]\nbackground = \"#802020\"\n",
+            ),
+        ],
+    );
+
+    poshanka.show(&[
+        notification(1, "normal", ""),
+        notification(2, "urgent", "").replace("\"normal\"", "\"critical\""),
+    ]);
+    let normal = common::wait_for_card(&sway, 0, true);
+    assert_eq!(normal.count([0x80, 0x20, 0x20]), 0);
+    let (x, y) = card_origin(1);
+    common::wait_for("the critical background", || {
+        (sway
+            .screenshot(x, y, common::CARD_W, common::CARD_H)
+            .count([0x80, 0x20, 0x20])
+            > 0)
+        .then_some(())
+    });
+}
+
+#[test]
+fn a_bottom_left_stack_puts_the_first_card_nearest_the_edge() {
+    let sway = sway_or_skip!();
+    let config = common::CONFIG.replace("top-right", "bottom-left");
+    let mut poshanka = Poshanka::start_with(&sway, &config, common::THEME, &[]);
+    let mut pointer = poshanka.pointer(&sway);
+    poshanka.show(&[notification(1, "first", ""), notification(2, "second", "")]);
+
+    let bottom = common::HEIGHT - common::CARD_H;
+    common::wait_for("the bottom card", || {
+        (sway
+            .screenshot(0, bottom, common::CARD_W, common::CARD_H)
+            .count(common::CARD_BG)
+            > 0)
+        .then_some(())
+    });
+    pointer.click_at(100, bottom + 20, BTN_LEFT);
+    poshanka.wait_for_call("close 1");
+    pointer.click_at(100, bottom - common::GAP - 20, BTN_LEFT);
+    poshanka.wait_for_call("close 2");
+}
+
+#[test]
+fn an_output_filter_picks_the_output_by_name() {
+    let sway = sway_or_skip!();
+    let config = common::CONFIG.replace("output = \"\"", "output = \"NOT-THERE\"");
+    let mut poshanka = Poshanka::start_with(&sway, &config, common::THEME, &[]);
+    poshanka.update(&[notification(1, "nowhere", "")]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!poshanka.log().contains("stack painted"));
+    let (x, y) = card_origin(0);
+    assert_eq!(
+        sway.screenshot(x, y, common::CARD_W, common::CARD_H)
+            .count(common::CARD_BG),
+        0
+    );
+    drop(poshanka);
+
+    let config = common::CONFIG.replace("output = \"\"", "output = \"HEADLESS-1\"");
+    let mut poshanka = Poshanka::start_with(&sway, &config, common::THEME, &[]);
+    poshanka.show(&[notification(1, "here", "")]);
+    common::wait_for_card(&sway, 0, true);
+}
