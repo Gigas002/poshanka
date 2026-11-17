@@ -33,9 +33,10 @@ pub fn spawn_feed_exec(
     wakeup: UnixStream,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let mut backoff = BACKOFF_INITIAL;
+        let mut backoff = Duration::ZERO;
         loop {
-            match run_feed_once(&command, &tx, &wakeup) {
+            let mut delivered = 0;
+            match run_feed_once(&command, &tx, &wakeup, &mut delivered) {
                 Ok(()) => {
                     warn!(%command, "provider feed script exited; restarting");
                 }
@@ -43,16 +44,31 @@ pub fn spawn_feed_exec(
                     warn!(%command, error = %e, "provider feed error; restarting after backoff");
                 }
             }
+            backoff = backoff_before_restart(backoff, delivered > 0);
             thread::sleep(backoff);
-            backoff = (backoff * 2).min(BACKOFF_MAX);
         }
     })
 }
 
+/// The delay before restarting the feed script: it doubles (up to
+/// [`BACKOFF_MAX`]) while runs deliver nothing, and starts over at
+/// [`BACKOFF_INITIAL`] after a run that delivered messages, so a provider
+/// that restarts now and then is reconnected to quickly every time.
+pub(crate) fn backoff_before_restart(previous: Duration, delivered: bool) -> Duration {
+    if delivered || previous.is_zero() {
+        BACKOFF_INITIAL
+    } else {
+        (previous * 2).min(BACKOFF_MAX)
+    }
+}
+
+/// Run the feed script once, forwarding its messages, until it exits;
+/// `delivered` counts the messages forwarded.
 pub(crate) fn run_feed_once(
     command: &str,
     tx: &SyncSender<FeedSignal>,
     wakeup: &UnixStream,
+    delivered: &mut usize,
 ) -> Result<(), String> {
     let mut child = Command::new("sh")
         .arg("-c")
@@ -73,7 +89,10 @@ pub(crate) fn run_feed_once(
             continue;
         }
         match parse_line(line) {
-            Ok(Some(msg)) => forward_message(msg, tx, wakeup)?,
+            Ok(Some(msg)) => {
+                forward_message(msg, tx, wakeup)?;
+                *delivered += 1;
+            }
             Ok(None) => {}
             Err(e) => {
                 warn!(%line, error = %e, "provider feed line is not valid NDJSON");
@@ -118,3 +137,6 @@ fn map_command_err(err: super::command::CommandError) -> ParseFeedError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

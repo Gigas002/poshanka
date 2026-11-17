@@ -13,6 +13,7 @@
 - A card shown on an empty screen could vanish right away: when the compositor configured the new surface a second time (sway does, right after mapping it), poshanka answered with a blank buffer, so a lone notification was never visible until the next update. The last frame is now repainted instead.
 - Every repaint leaked a Wayland buffer and its shared-memory pool: poshanka dropped them without destroying them, so the compositor kept their memory for as long as poshanka ran (a card's worth for each update). Pools are now destroyed right after use and buffers once the compositor releases them; surfaces the compositor closes are destroyed too.
 - Notifications arriving in quick succession could leave the whole stack blank until the next update: when the stack was resized again before the compositor answered the previous resize, that late answer took the newest frame and, its size not matching, painted a transparent buffer instead. Late answers to older sizes are now skipped.
+- The delay before restarting the provider feed script only ever grew (1, 2, 4 … 30 s) for poshanka's whole lifetime, so after a few notred restarts every reconnection took 30 s, and notifications sent in between never showed. It now starts over at 1 s after any run that delivered messages.
 
 ### Security
 

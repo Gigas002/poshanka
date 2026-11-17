@@ -212,3 +212,30 @@ fn an_unreadable_image_does_not_crash_poshanka() {
         poshanka.log()
     );
 }
+
+/// A feed script that delivers and then exits (a provider restart) is run
+/// again after a second each time, not after ever longer pauses.
+#[test]
+fn a_feed_that_keeps_delivering_is_restarted_promptly() {
+    let sway = sway_or_skip!();
+    let dir = tempfile::tempdir().unwrap();
+    let starts = dir.path().join("starts");
+    let script = dir.path().join("feed.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\necho >> '{}'\necho '{{\"v\": 1, \"type\": \"event\", \"event\": {{\"kind\": \"update\", \"items\": []}}}}'\n",
+            starts.display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let config = common::CONFIG.replace("{dir}/feed.sh", script.to_str().unwrap());
+
+    let _poshanka = Poshanka::start_with(&sway, &config, common::THEME, &[]);
+    // With a growing backoff the fifth start comes after 1+2+4+8 s.
+    std::thread::sleep(std::time::Duration::from_secs(7));
+    let runs = std::fs::read_to_string(&starts).unwrap().lines().count();
+    assert!(runs >= 5, "{runs} runs in 7 s");
+}
