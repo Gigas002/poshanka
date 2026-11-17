@@ -218,19 +218,16 @@ pub fn load_icon_pixmap_from_raw(raw: &RawIconData, size: u32) -> Result<Pixmap,
 /// shape) into a premultiplied RGBA pixmap.
 fn raw_pixels_to_pixmap(raw: &RawIconData, data: &[u8]) -> Result<Pixmap, PoshankaError> {
     let (width, height) = (pixmap_dim(raw.width)?, pixmap_dim(raw.height)?);
-    let channels = raw.channels.max(1) as usize;
-    let rowstride = raw.rowstride.max(0) as usize;
-    let has_alpha = raw.has_alpha && channels >= 4;
+    let (channels, rowstride) = raw_layout(raw, data.len())?;
+    let has_alpha = raw.has_alpha;
 
     let row_bytes = usize::from(width) * 4;
     let mut rgba = vec![0u8; row_bytes * usize::from(height)];
     for y in 0..usize::from(height) {
         let src_row = y * rowstride;
         for x in 0..usize::from(width) {
+            // In bounds: `raw_layout` checked that every row is complete.
             let src_px = src_row + x * channels;
-            if src_px + channels > data.len() {
-                continue; // truncated/malformed row; leave transparent
-            }
             let (r, g, b) = (data[src_px], data[src_px + 1], data[src_px + 2]);
             let a = if has_alpha { data[src_px + 3] } else { 255 };
             let premultiply = |c: u8| (u16::from(c) * u16::from(a) / 255) as u8;
@@ -251,6 +248,36 @@ fn raw_pixels_to_pixmap(raw: &RawIconData, data: &[u8]) -> Result<Pixmap, Poshan
         height,
         PixelMetadata::default(),
     ))
+}
+
+/// Check that `raw` describes 8-bit RGB (3 channels) or RGBA (4, with
+/// `has_alpha`) rows that `data_len` bytes hold in full, as the FDN
+/// `image-data` hint requires; return `(channels, rowstride)`.
+fn raw_layout(raw: &RawIconData, data_len: usize) -> Result<(usize, usize), PoshankaError> {
+    let invalid = |why: &str| Err(PoshankaError::Render(format!("raw icon: {why}")));
+    if raw.bits_per_sample != 8 {
+        return invalid("only 8 bits per sample are supported");
+    }
+    let channels = match (raw.channels, raw.has_alpha) {
+        (3, false) => 3,
+        (4, true) => 4,
+        _ => return invalid("expected 3 channels, or 4 with alpha"),
+    };
+    let (width, height) = (raw.width as usize, raw.height as usize);
+    let Ok(rowstride) = usize::try_from(raw.rowstride) else {
+        return invalid("negative rowstride");
+    };
+    let row = width * channels;
+    if rowstride < row {
+        return invalid("rowstride is shorter than a row");
+    }
+    let needed = rowstride
+        .checked_mul(height - 1)
+        .and_then(|n| n.checked_add(row));
+    if needed.is_none_or(|n| data_len < n) {
+        return invalid("data is shorter than its rows");
+    }
+    Ok((channels, rowstride))
 }
 
 fn load_raster_pixmap(path: &Path, size: u32) -> Result<Pixmap, PoshankaError> {

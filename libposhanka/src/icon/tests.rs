@@ -183,3 +183,47 @@ fn load_icon_pixmap_from_raw_rejects_invalid_dimensions() {
     let raw = raw_icon(0, 0, true, &[]);
     assert!(load_icon_pixmap_from_raw(&raw, 8).is_err());
 }
+
+/// Image data the decoder cannot read is an error (the card then uses the
+/// next icon source), never a panic or a read past the buffer.
+#[test]
+fn load_icon_pixmap_from_raw_rejects_unreadable_layouts() {
+    let ok = raw_icon(2, 2, false, &[7; 12]);
+    assert!(load_icon_pixmap_from_raw(&ok, 4).is_ok());
+
+    type Edit = fn(&mut RawIconData);
+    let cases: [(&str, Edit); 7] = [
+        ("one channel", |r| {
+            r.channels = 1;
+            r.rowstride = 2;
+        }),
+        ("two channels", |r| {
+            r.channels = 2;
+            r.rowstride = 4;
+        }),
+        ("five channels", |r| {
+            r.channels = 5;
+            r.rowstride = 10;
+        }),
+        ("16-bit samples", |r| r.bits_per_sample = 16),
+        ("alpha without a fourth channel", |r| r.has_alpha = true),
+        ("rowstride below a row", |r| r.rowstride = 5),
+        ("data shorter than the rows", |r| {
+            r.data_base64 = base64_ng::encode(&[7u8; 11]).unwrap();
+        }),
+    ];
+    for (what, edit) in cases {
+        let mut raw = ok.clone();
+        edit(&mut raw);
+        assert!(load_icon_pixmap_from_raw(&raw, 4).is_err(), "{what}");
+    }
+}
+
+#[test]
+fn load_icon_pixmap_from_raw_needs_no_padding_after_the_last_row() {
+    // rowstride 8 for 6-byte rows: the last row may stop after 6 bytes.
+    let mut raw = raw_icon(2, 2, false, &[]);
+    raw.rowstride = 8;
+    raw.data_base64 = base64_ng::encode(&[9u8; 8 + 6]).unwrap();
+    assert!(load_icon_pixmap_from_raw(&raw, 2).is_ok());
+}

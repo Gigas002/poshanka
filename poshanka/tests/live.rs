@@ -195,3 +195,20 @@ fn a_burst_of_updates_ends_with_every_card_drawn() {
         }
     }
 }
+
+/// One-channel image data used to index past the pixel buffer and crash
+/// poshanka; now the card falls back to another icon.
+#[test]
+fn an_unreadable_image_does_not_crash_poshanka() {
+    let sway = sway_or_skip!();
+    let theme = common::THEME.replace("size = 0", "size = 16");
+    let mut poshanka = Poshanka::start_with(&sway, common::CONFIG, &theme, &[]);
+    let icon = r#""icon": {"width": 4, "height": 4, "rowstride": 4, "has_alpha": false, "bits_per_sample": 8, "channels": 1, "data": "AAAAAAAAAAAAAAAAAAAAAA=="}"#;
+    poshanka.show(&[notification(1, "gray avatar", icon)]);
+    common::wait_for_card(&sway, 0, true);
+    assert!(
+        poshanka.try_wait().is_none(),
+        "poshanka exited:\n{}",
+        poshanka.log()
+    );
+}
