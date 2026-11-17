@@ -80,8 +80,21 @@ pub(crate) fn run_feed_once(
         .map_err(|e| format!("spawn: {e}"))?;
 
     let stdout = child.stdout.take().ok_or("child has no stdout")?;
-    let reader = std::io::BufReader::new(stdout);
+    let result = forward_lines(std::io::BufReader::new(stdout), tx, wakeup, delivered);
+    if result.is_err() {
+        // Don't leave the script running, writing to a pipe nobody reads.
+        let _ = child.kill();
+    }
+    child.wait().map_err(|e| format!("wait: {e}"))?;
+    result
+}
 
+fn forward_lines(
+    reader: impl BufRead,
+    tx: &SyncSender<FeedSignal>,
+    wakeup: &UnixStream,
+    delivered: &mut usize,
+) -> Result<(), String> {
     for line in reader.lines() {
         let line = line.map_err(|e| format!("read: {e}"))?;
         let line = line.trim();
@@ -99,8 +112,6 @@ pub(crate) fn run_feed_once(
             }
         }
     }
-
-    child.wait().map_err(|e| format!("wait: {e}"))?;
     Ok(())
 }
 
@@ -115,8 +126,10 @@ fn forward_message(
         FeedMessage::Event(super::FeedEvent::Reload) => FeedSignal::Reload,
         FeedMessage::Event(super::FeedEvent::HistoryChanged) => return Ok(()),
     };
-    tx.try_send(signal)
-        .map_err(|e| format!("channel full: {e}"))?;
+    // Waits while the Wayland thread is busy with earlier updates; fails
+    // only when it is gone.
+    tx.send(signal)
+        .map_err(|_| "the Wayland loop has ended".to_string())?;
     wakeup
         .try_clone()
         .map_err(|e| format!("wakeup clone: {e}"))?
