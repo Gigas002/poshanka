@@ -375,3 +375,19 @@ fn an_output_filter_picks_the_output_by_name() {
     poshanka.show(&[notification(1, "here", "")]);
     common::wait_for_card(&sway, 0, true);
 }
+
+#[test]
+fn sigterm_ends_poshanka_cleanly() {
+    let sway = sway_or_skip!();
+    let mut poshanka = Poshanka::start(&sway);
+    poshanka.show(&[notification(1, "x", "")]);
+    common::wait_for_card(&sway, 0, true);
+    let pid = std::fs::read_to_string(poshanka.path("feed.pid")).unwrap();
+
+    let status = poshanka.terminate();
+    assert!(status.success(), "{status}; log:\n{}", poshanka.log());
+    assert!(poshanka.log().contains("stopping"));
+    common::wait_for_card(&sway, 0, false);
+    let proc = std::path::Path::new("/proc").join(pid.trim());
+    common::wait_for("the feed script to end", || (!proc.exists()).then_some(()));
+}

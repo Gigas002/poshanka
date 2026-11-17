@@ -610,8 +610,27 @@ impl Poshanka {
     }
 }
 
+impl Poshanka {
+    /// Send `SIGTERM` and wait for poshanka to exit.
+    pub fn terminate(&mut self) -> ExitStatus {
+        let pid = rustix::process::Pid::from_child(&self.child);
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+        try_wait_for(|| self.child.try_wait().unwrap())
+            .unwrap_or_else(|| panic!("poshanka ignored SIGTERM; log:\n{}", self.log()))
+    }
+}
+
 impl Drop for Poshanka {
     fn drop(&mut self) {
+        // SIGTERM first: a clean exit also writes coverage data.
+        if self.child.try_wait().ok().flatten().is_none() {
+            let pid = rustix::process::Pid::from_child(&self.child);
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while self.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

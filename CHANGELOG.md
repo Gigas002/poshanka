@@ -7,6 +7,7 @@
 - Rendering migrated from Cairo/Pango to pure-Rust [vello_cpu](https://github.com/linebender/vello) (rasterization) and [parley](https://github.com/linebender/parley) (text layout); the only remaining system dependency is fontconfig for font discovery.
 - Pango markup is now parsed in-crate. Supported: `b`, `i`, `u`, `s`, `tt`, `big`, `small`, `sub`, `sup`, `span` (font/family/size/style/weight/foreground/alpha/underline/strikethrough attributes). Other `span` attributes (e.g. `background`) are ignored.
 - `libposhanka`: `load_icon_surface`/`load_icon_surface_from_raw` are now `load_icon_pixmap`/`load_icon_pixmap_from_raw` and return `vello_cpu::Pixmap`.
+- `libposhanka`: `SubscriberRun` has a new `stop` field and `run_overlay` a new `stop` parameter: a descriptor that ends the loop when it becomes readable.
 
 ### Fixed
 
@@ -21,6 +22,7 @@
 - Theme colors written as `#RRGGBB`, which `examples/theme.toml` documents, were rejected and poshanka refused to start; they are now read as opaque.
 - Unknown keys in `config.toml`, the theme and override fragments (such as `[paths] override` for `overrides`) were silently ignored; each one is now logged as a warning.
 - A feed line that fails to parse is logged by its first 200 bytes; a line with image data used to be logged whole, megabytes at a time.
+- poshanka exits cleanly on `SIGTERM` and `SIGINT` (`systemctl --user stop`, Ctrl+C): it removes its surfaces, stops the feed script and exits with status 0, instead of being killed mid-frame.
 
 ### Security
 

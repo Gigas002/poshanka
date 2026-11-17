@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod logger;
 mod settings;
+mod signals;
 mod theme;
 
 use std::process::ExitCode;
@@ -16,6 +17,7 @@ use crate::settings::Settings;
 use crate::theme::Theme;
 
 fn main() -> ExitCode {
+    let stop = signals::stop_signals();
     logger::init();
     let cli = Cli::parse();
 
@@ -56,5 +58,5 @@ fn main() -> ExitCode {
         "poshanka starting"
     );
 
-    app::run(&settings, &config_path)
+    app::run(&settings, &config_path, stop)
 }

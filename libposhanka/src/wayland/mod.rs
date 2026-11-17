@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc;
 
@@ -68,14 +68,16 @@ pub struct FeedHandle {
     pub rx: mpsc::Receiver<FeedSignal>,
 }
 
-/// Runs the notification card stack until the compositor connection closes
-/// or an unrecoverable protocol error occurs.
+/// Runs the notification card stack until `stop` becomes readable (`Ok`),
+/// the compositor connection closes, or an unrecoverable protocol error
+/// occurs.
 pub fn run_overlay(
     stack_spec: SubscriberSpec,
     initial: Vec<NotificationView>,
     feed: Option<FeedHandle>,
     style_source: Box<dyn StyleSource>,
     provider: ProviderSpec,
+    stop: Option<OwnedFd>,
 ) -> Result<(), PoshankaError> {
     let conn = Connection::connect_to_env()?;
     let display = conn.display();
@@ -133,19 +135,28 @@ pub fn run_overlay(
 
         let wayland_fd = read_guard.connection_fd();
         let mut pollfds = vec![PollFd::from_borrowed_fd(wayland_fd, PollFlags::IN)];
+        if let Some(stop) = stop.as_ref() {
+            pollfds.push(PollFd::from_borrowed_fd(stop.as_fd(), PollFlags::IN));
+        }
         if let Some(feed) = state.feed.as_mut() {
             pollfds.push(PollFd::from_borrowed_fd(feed.wakeup.as_fd(), PollFlags::IN));
         }
 
         loop {
             match poll(&mut pollfds, None) {
-                Ok(0) => continue,
+                // A signal arrived (its handler may have made `stop` readable).
+                Ok(0) | Err(rustix::io::Errno::INTR) => continue,
                 Ok(_) => break,
                 Err(e) => {
                     return Err(PoshankaError::WaylandProtocol(format!("poll failed: {e}")));
                 }
             }
         }
+        if stop.is_some() && !pollfds[1].revents().is_empty() {
+            info!("stopping");
+            break;
+        }
+        drop(pollfds);
 
         // `poll` may have woken us for the feed's wakeup fd alone, with nothing
         // to read on the Wayland socket; `read` reports that as `WouldBlock`,
@@ -171,6 +182,11 @@ pub fn run_overlay(
         }
     }
 
+    for (_, stack) in state.stack_surfaces.drain() {
+        stack.destroy();
+    }
+    // Best effort: the connection may be what ended the loop.
+    let _ = event_queue.flush();
     Ok(())
 }
 

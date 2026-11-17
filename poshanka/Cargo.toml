@@ -16,6 +16,7 @@ icons = ["libposhanka/icons"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+libc = "0.2"
 libposhanka = { path = "../libposhanka" }
 serde = { version = "1", features = ["derive"] }
 serde_ignored = "0.1"

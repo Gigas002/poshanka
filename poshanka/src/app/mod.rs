@@ -8,7 +8,11 @@ use crate::settings::Settings;
 use crate::theme;
 use style::OverrideStyleSource;
 
-pub fn run(settings: &Settings, config_path: &Path) -> std::process::ExitCode {
+pub fn run(
+    settings: &Settings,
+    config_path: &Path,
+    stop: Option<std::os::fd::OwnedFd>,
+) -> std::process::ExitCode {
     let mut provider = ProviderSpec::from(&settings.subscriber);
     if let Some(exec) = provider.exec.as_ref() {
         provider.exec = Some(
@@ -30,6 +34,7 @@ pub fn run(settings: &Settings, config_path: &Path) -> std::process::ExitCode {
         provider,
         stack: settings.subscriber.clone(),
         style_source: Box::new(style_source),
+        stop,
     };
 
     match run_subscriber(run) {
