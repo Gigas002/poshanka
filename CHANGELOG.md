@@ -15,6 +15,7 @@
 - Notifications arriving in quick succession could leave the whole stack blank until the next update: when the stack was resized again before the compositor answered the previous resize, that late answer took the newest frame and, its size not matching, painted a transparent buffer instead. Late answers to older sizes are now skipped.
 - The delay before restarting the provider feed script only ever grew (1, 2, 4 … 30 s) for poshanka's whole lifetime, so after a few notred restarts every reconnection took 30 s, and notifications sent in between never showed. It now starts over at 1 s after any run that delivered messages.
 - When updates queued up faster than they were painted (64 waiting), the feed gave up and restarted the script instead of waiting, and the abandoned script kept running. The feed now waits for room, and stops its script if it does end early.
+- The provider feed script is stopped when poshanka ends, however it ends; it used to keep running (with its `notredctl subscribe`) until its next write failed.
 
 ### Security
 

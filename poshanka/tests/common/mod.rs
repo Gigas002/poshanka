@@ -469,7 +469,11 @@ impl Poshanka {
             .unwrap();
         write_script(
             &p("feed.sh"),
-            &format!("exec cat '{}'\n", p("feed").display()),
+            &format!(
+                "echo $$ > '{}'\nexec cat '{}'\n",
+                p("feed.pid").display(),
+                p("feed").display()
+            ),
         );
         write_script(
             &p("notredctl"),
@@ -581,6 +585,12 @@ impl Poshanka {
 
     pub fn pid(&self) -> u32 {
         self.child.id()
+    }
+
+    /// Kill poshanka with `SIGKILL` (no chance to clean up) and wait for it.
+    pub fn kill(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

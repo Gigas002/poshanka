@@ -70,14 +70,14 @@ pub(crate) fn run_feed_once(
     wakeup: &UnixStream,
     delivered: &mut usize,
 ) -> Result<(), String> {
-    let mut child = Command::new("sh")
-        .arg("-c")
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
         .arg(command)
         .stdout(Stdio::piped())
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("spawn: {e}"))?;
+        .stderr(Stdio::null());
+    end_with_parent(&mut cmd);
+    let mut child = cmd.spawn().map_err(|e| format!("spawn: {e}"))?;
 
     let stdout = child.stdout.take().ok_or("child has no stdout")?;
     let result = forward_lines(std::io::BufReader::new(stdout), tx, wakeup, delivered);
@@ -87,6 +87,24 @@ pub(crate) fn run_feed_once(
     }
     child.wait().map_err(|e| format!("wait: {e}"))?;
     result
+}
+
+/// Have the kernel send the feed script `SIGTERM` when poshanka ends,
+/// however it ends (crash, `SIGKILL`, compositor gone), so the script and
+/// its subscription don't linger without a reader. (The signal follows the
+/// thread that spawned the script: the feed thread, which lives as long as
+/// poshanka.)
+fn end_with_parent(cmd: &mut Command) {
+    use rustix::process::{Signal, set_parent_process_death_signal};
+    use std::os::unix::process::CommandExt;
+    // SAFETY: the closure runs between fork and exec, where only
+    // async-signal-safe calls are allowed; it makes one prctl system call
+    // and touches no memory shared with the parent.
+    unsafe {
+        cmd.pre_exec(|| {
+            set_parent_process_death_signal(Some(Signal::TERM)).map_err(std::io::Error::from)
+        });
+    }
 }
 
 fn forward_lines(

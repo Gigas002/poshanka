@@ -239,3 +239,19 @@ fn a_feed_that_keeps_delivering_is_restarted_promptly() {
     let runs = std::fs::read_to_string(&starts).unwrap().lines().count();
     assert!(runs >= 5, "{runs} runs in 7 s");
 }
+
+/// The feed script must not outlive poshanka, however poshanka ends.
+#[test]
+fn the_feed_script_ends_with_poshanka() {
+    let sway = sway_or_skip!();
+    let mut poshanka = Poshanka::start(&sway);
+    let pid = common::wait_for("the feed script", || {
+        std::fs::read_to_string(poshanka.path("feed.pid"))
+            .ok()
+            .filter(|s| s.ends_with('\n'))
+    });
+    let proc = std::path::Path::new("/proc").join(pid.trim());
+    assert!(proc.exists());
+    poshanka.kill();
+    common::wait_for("the feed script to end", || (!proc.exists()).then_some(()));
+}
