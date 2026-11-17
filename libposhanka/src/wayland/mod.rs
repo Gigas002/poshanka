@@ -244,8 +244,10 @@ struct StackSurface {
     /// right after a surface is first mapped).
     shown_frame: Option<Frame>,
     margin: (i32, i32, i32, i32),
+    /// Backing file of the attached buffer, kept until the next paint.
     pool_file: Option<File>,
-    pool: Option<wl_shm_pool::WlShmPool>,
+    /// The attached buffer; destroyed when the compositor releases it (see
+    /// the `wl_buffer` dispatch) or with the surface.
     buffer: Option<wl_buffer::WlBuffer>,
 }
 
@@ -466,7 +468,6 @@ impl AppState {
                 shown_frame: None,
                 margin,
                 pool_file: None,
-                pool: None,
                 buffer: None,
             },
         );
@@ -523,7 +524,9 @@ impl AppState {
 
     fn on_closed(&mut self, output_key: u32) {
         debug!(output_key, "layer surface closed by compositor");
-        self.stack_surfaces.remove(&output_key);
+        if let Some(stack) = self.stack_surfaces.remove(&output_key) {
+            stack.destroy();
+        }
         self.pointer_pos = None;
     }
 
@@ -628,8 +631,8 @@ impl StackSurface {
     ) -> Result<(), PoshankaError> {
         let size = (stride as u64).saturating_mul(u64::from(height));
 
+        // The previous buffer is destroyed when the compositor releases it.
         self.buffer.take();
-        self.pool.take();
         self.pool_file.take();
 
         let mut file = tempfile::tempfile_in("/dev/shm").map_err(|source| PoshankaError::Io {
@@ -655,6 +658,8 @@ impl StackSurface {
             qh,
             (),
         );
+        // The buffer keeps the pool's memory; the pool itself is not needed.
+        pool.destroy();
 
         self.surface.attach(Some(&buffer), 0, 0);
         self.surface
@@ -663,7 +668,6 @@ impl StackSurface {
         debug!(width, height, "stack painted");
 
         self.pool_file = Some(file);
-        self.pool = Some(pool);
         self.buffer = Some(buffer);
         Ok(())
     }
@@ -671,6 +675,11 @@ impl StackSurface {
     fn destroy(self) {
         self.layer_surface.destroy();
         self.surface.destroy();
+        // Destroying a buffer the compositor already released (and so
+        // destroyed) again sends nothing.
+        if let Some(buffer) = self.buffer {
+            buffer.destroy();
+        }
     }
 }
 
@@ -907,7 +916,24 @@ impl Dispatch<wl_surface::WlSurface, u32> for AppState {
 wayland_client::delegate_noop!(AppState: ignore wl_compositor::WlCompositor);
 wayland_client::delegate_noop!(AppState: ignore wl_shm::WlShm);
 wayland_client::delegate_noop!(AppState: ignore wl_shm_pool::WlShmPool);
-wayland_client::delegate_noop!(AppState: ignore wl_buffer::WlBuffer);
+
+/// A released buffer is never painted into again (each paint makes a new
+/// one), so it is destroyed; otherwise the compositor would keep its memory
+/// for as long as poshanka runs.
+impl Dispatch<wl_buffer::WlBuffer, ()> for AppState {
+    fn event(
+        _: &mut Self,
+        buffer: &wl_buffer::WlBuffer,
+        event: wl_buffer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_buffer::Event::Release = event {
+            buffer.destroy();
+        }
+    }
+}
 wayland_client::delegate_noop!(AppState: ignore ZwlrLayerShellV1);
 
 #[cfg(test)]

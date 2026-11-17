@@ -134,3 +134,41 @@ fn every_card_of_a_stack_is_drawn() {
     let gap = sway.screenshot(x, y - common::GAP, common::CARD_W, common::GAP);
     assert_eq!(gap.count(common::CARD_BG), 0);
 }
+
+/// Every repaint creates a buffer from a new shm pool; both must be given
+/// back to the compositor, or it keeps their memory for as long as poshanka
+/// runs.
+#[test]
+fn buffers_and_pools_are_destroyed_after_use() {
+    let sway = sway_or_skip!();
+    let mut poshanka = Poshanka::start_with(
+        &sway,
+        common::CONFIG,
+        common::THEME,
+        &[("WAYLAND_DEBUG", "1")],
+    );
+    for i in 0..20 {
+        poshanka.show(&[notification(1, &format!("update {i}"), "")]);
+    }
+    poshanka.update(&[]);
+    let log = poshanka.log();
+    let requests = |object: &str, request: &str| {
+        log.lines()
+            .filter(|l| l.contains(&format!("-> {object}@")) && l.contains(request))
+            .count()
+    };
+    let created = requests("wl_shm_pool", ".create_buffer(");
+    assert!(created >= 20, "{created} buffers created");
+    // Pools right away; buffers once the compositor releases them, or with
+    // their surface.
+    assert_eq!(
+        requests("wl_shm_pool", ".destroy()"),
+        created,
+        "pools destroyed"
+    );
+    let destroyed = requests("wl_buffer", ".destroy()");
+    assert_eq!(
+        destroyed, created,
+        "{destroyed} of {created} buffers destroyed"
+    );
+}
