@@ -235,6 +235,10 @@ struct StackSurface {
     layer_surface: ZwlrLayerSurfaceV1,
     /// Last size requested via `set_size` (awaiting or matching a configure).
     requested_size: (u32, u32),
+    /// Sizes requested via `set_size` that no configure has answered yet,
+    /// oldest first. A configure answering one of the older ones is stale:
+    /// the answer to `requested_size` is still on its way.
+    unanswered: Vec<(u32, u32)>,
     /// Whether at least one configure has been acked for `requested_size`.
     configured: bool,
     /// Frame content to paint once the next configure is acked.
@@ -423,6 +427,7 @@ impl AppState {
 
             if size_changed {
                 stack.requested_size = (frame.width, frame.height);
+                stack.unanswered.push(stack.requested_size);
                 stack.configured = false;
                 stack.layer_surface.set_size(frame.width, frame.height);
                 stack.pending_frame = Some(frame);
@@ -463,6 +468,7 @@ impl AppState {
                 surface,
                 layer_surface,
                 requested_size: (frame.width, frame.height),
+                unanswered: vec![(frame.width, frame.height)],
                 configured: false,
                 pending_frame: Some(frame),
                 shown_frame: None,
@@ -493,6 +499,21 @@ impl AppState {
 
         let width = width.max(1);
         let height = height.max(1);
+
+        // A configure answers the latest `set_size` it saw, and the ones
+        // before it. While a newer size is still unanswered, keep the newest
+        // frame for that answer instead of painting it at the wrong size.
+        if let Some(pos) = stack.unanswered.iter().position(|&s| s == (width, height)) {
+            stack.unanswered.drain(..=pos);
+            if !stack.unanswered.is_empty() {
+                debug!(
+                    output_key,
+                    width, height, "configure for an older size; waiting"
+                );
+                return;
+            }
+        }
+        stack.unanswered.clear();
         stack.configured = true;
 
         let result = match stack

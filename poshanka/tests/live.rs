@@ -172,3 +172,26 @@ fn buffers_and_pools_are_destroyed_after_use() {
         "{destroyed} of {created} buffers destroyed"
     );
 }
+
+/// Updates that resize the stack faster than the compositor answers: the
+/// answer to an older size must not replace the newest frame.
+#[test]
+fn a_burst_of_updates_ends_with_every_card_drawn() {
+    let sway = sway_or_skip!();
+    let mut poshanka = Poshanka::start(&sway);
+    let mut items = Vec::new();
+    // 12 cards: all on the 720 px output.
+    for round in 0..2 {
+        for i in 1..=6 {
+            items.push(notification(round * 6 + i, "burst", ""));
+            poshanka.send(&format!(
+                r#"{{"v": 1, "type": "event", "event": {{"kind": "update", "items": [{}]}}}}"#,
+                items.join(", ")
+            ));
+        }
+        let n = items.len() as u32;
+        for index in [0, n / 2, n - 1] {
+            common::wait_for_card(&sway, index, true);
+        }
+    }
+}
