@@ -649,6 +649,7 @@ impl StackSurface {
         self.surface
             .damage_buffer(0, 0, width as i32, height as i32);
         self.surface.commit();
+        debug!(width, height, "stack painted");
 
         self.pool_file = Some(file);
         self.pool = Some(pool);
@@ -783,9 +784,11 @@ impl Dispatch<wl_seat::WlSeat, ()> for AppState {
 
         if capabilities.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
             state.pointer = Some(seat.get_pointer(qh, ()));
+            debug!("pointer bound");
         }
         if capabilities.contains(wl_seat::Capability::Touch) && state.touch.is_none() {
             state.touch = Some(seat.get_touch(qh, ()));
+            debug!("touch bound");
         }
     }
 }

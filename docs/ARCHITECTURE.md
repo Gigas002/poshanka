@@ -219,6 +219,12 @@ Use the **`tracing`** ecosystem for structured logging.
 
 - Place cross-module and end-to-end tests in `<crate>/tests/`.
 - Use temporary directories and fixtures from `examples/` where applicable.
+- `poshanka/tests/live.rs` runs the real binary in a headless sway (each test
+  its own, in a private runtime directory), feeds it notifications through a
+  FIFO, clicks cards with a virtual pointer, records the provider calls with a
+  stand-in `notredctl`, and reads back pixels with `grim`. Without `sway` and
+  `grim` these tests are skipped; `POSHANKA_LIVE_TESTS=1` (set in CI) makes
+  that a failure.
 
 ### 6.3 Coverage expectations
 

@@ -925,12 +925,15 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "libposhanka",
+ "rustix",
  "serde",
  "tempfile",
  "thiserror",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]
