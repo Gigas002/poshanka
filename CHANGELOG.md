@@ -18,6 +18,7 @@
 - The provider feed script is stopped when poshanka ends, however it ends; it used to keep running (with its `notredctl subscribe`) until its next write failed.
 - Placeholders written in a notification's own text were filled in too: a summary containing `{body}` showed the body there, and a body containing `{app_id}` or `{id}` showed those. Templates are now filled in one pass.
 - Bodies using the Desktop Notifications markup for links (`<a href>`) or images (`<img>`) were shown as raw text with their tags, because the whole body fell back to plain text. Links now show their text and images their `alt` text.
+- Theme colors written as `#RRGGBB`, which `examples/theme.toml` documents, were rejected and poshanka refused to start; they are now read as opaque.
 
 ### Security
 
