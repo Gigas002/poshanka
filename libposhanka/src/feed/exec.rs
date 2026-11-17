@@ -126,6 +126,7 @@ fn forward_lines(
             }
             Ok(None) => {}
             Err(e) => {
+                let line = log_excerpt(line);
                 warn!(%line, error = %e, "provider feed line is not valid NDJSON");
             }
         }
@@ -154,6 +155,20 @@ fn forward_message(
         .write_all(&[0])
         .map_err(|e| format!("wakeup write: {e}"))?;
     Ok(())
+}
+
+/// The start of a feed line for a log message: lines carrying image data
+/// run to megabytes.
+pub(crate) fn log_excerpt(line: &str) -> std::borrow::Cow<'_, str> {
+    const MAX: usize = 200;
+    if line.len() <= MAX {
+        return line.into();
+    }
+    let end = (0..=MAX)
+        .rev()
+        .find(|&i| line.is_char_boundary(i))
+        .unwrap_or(0);
+    format!("{}… ({} bytes)", &line[..end], line.len()).into()
 }
 
 fn map_command_err(err: super::command::CommandError) -> ParseFeedError {

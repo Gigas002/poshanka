@@ -20,6 +20,7 @@
 - Bodies using the Desktop Notifications markup for links (`<a href>`) or images (`<img>`) were shown as raw text with their tags, because the whole body fell back to plain text. Links now show their text and images their `alt` text.
 - Theme colors written as `#RRGGBB`, which `examples/theme.toml` documents, were rejected and poshanka refused to start; they are now read as opaque.
 - Unknown keys in `config.toml`, the theme and override fragments (such as `[paths] override` for `overrides`) were silently ignored; each one is now logged as a warning.
+- A feed line that fails to parse is logged by its first 200 bytes; a line with image data used to be logged whole, megabytes at a time.
 
 ### Security
 

@@ -82,3 +82,11 @@ fn a_closed_channel_ends_the_run_and_the_script() {
     let alive = std::path::Path::new("/proc").join(pid.trim()).exists();
     assert!(!alive, "feed script {} still running", pid.trim());
 }
+
+#[test]
+fn log_excerpts_cut_long_lines_on_a_char_boundary() {
+    assert_eq!(super::log_excerpt("short"), "short");
+    let line = format!("{}é{}", "a".repeat(199), "b".repeat(5_000_000));
+    let excerpt = super::log_excerpt(&line);
+    assert_eq!(excerpt, format!("{}… (5000201 bytes)", "a".repeat(199)));
+}
