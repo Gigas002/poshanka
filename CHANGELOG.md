@@ -8,6 +8,7 @@
 - Pango markup is now parsed in-crate. Supported: `b`, `i`, `u`, `s`, `tt`, `big`, `small`, `sub`, `sup`, `span` (font/family/size/style/weight/foreground/alpha/underline/strikethrough attributes). Other `span` attributes (e.g. `background`) are ignored.
 - `libposhanka`: `load_icon_surface`/`load_icon_surface_from_raw` are now `load_icon_pixmap`/`load_icon_pixmap_from_raw` and return `vello_cpu::Pixmap`.
 - `libposhanka`: `SubscriberRun` has a new `stop` field and `run_overlay` a new `stop` parameter: a descriptor that ends the loop when it becomes readable.
+- Updated parley to 0.13, vello_cpu to 0.4 and resvg to 0.50; cards render the same.
 
 ### Fixed
 

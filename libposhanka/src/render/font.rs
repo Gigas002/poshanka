@@ -179,8 +179,8 @@ impl FontContext {
         }
 
         let mut layout = builder.build(&rich.text);
+        layout.set_alignment(text_alignment(align), AlignmentOptions::default());
         layout.break_all_lines(Some(width));
-        layout.align(text_alignment(align), AlignmentOptions::default());
         layout
     }
 }
