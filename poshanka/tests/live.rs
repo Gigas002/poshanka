@@ -100,3 +100,37 @@ fn the_initial_list_is_used_before_the_feed_says_anything() {
             .then_some(())
     });
 }
+
+#[test]
+fn a_lone_card_is_drawn_and_cleared() {
+    let sway = sway_or_skip!();
+    let mut poshanka = Poshanka::start(&sway);
+    poshanka.show(&[notification(1, "only one", "")]);
+    let card = common::wait_for_card(&sway, 0, true);
+    assert_eq!(card.pixel(0, common::CARD_H / 2), common::BORDER);
+
+    poshanka.update(&[]);
+    common::wait_for_card(&sway, 0, false);
+
+    // A new surface after the stack was empty.
+    poshanka.show(&[notification(2, "again", "")]);
+    common::wait_for_card(&sway, 0, true);
+}
+
+#[test]
+fn every_card_of_a_stack_is_drawn() {
+    let sway = sway_or_skip!();
+    let mut poshanka = Poshanka::start(&sway);
+    poshanka.show(&[
+        notification(1, "a", ""),
+        notification(2, "b", ""),
+        notification(3, "c", ""),
+    ]);
+    for index in 0..3 {
+        common::wait_for_card(&sway, index, true);
+    }
+    // The gaps between cards stay clear.
+    let (x, y) = card_origin(1);
+    let gap = sway.screenshot(x, y - common::GAP, common::CARD_W, common::GAP);
+    assert_eq!(gap.count(common::CARD_BG), 0);
+}

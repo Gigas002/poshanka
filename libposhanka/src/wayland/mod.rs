@@ -239,6 +239,10 @@ struct StackSurface {
     configured: bool,
     /// Frame content to paint once the next configure is acked.
     pending_frame: Option<Frame>,
+    /// The frame last painted, repainted when the compositor configures the
+    /// surface again without new content (sway sends a second configure
+    /// right after a surface is first mapped).
+    shown_frame: Option<Frame>,
     margin: (i32, i32, i32, i32),
     pool_file: Option<File>,
     pool: Option<wl_shm_pool::WlShmPool>,
@@ -459,6 +463,7 @@ impl AppState {
                 requested_size: (frame.width, frame.height),
                 configured: false,
                 pending_frame: Some(frame),
+                shown_frame: None,
                 margin,
                 pool_file: None,
                 pool: None,
@@ -489,7 +494,11 @@ impl AppState {
         let height = height.max(1);
         stack.configured = true;
 
-        let result = match stack.pending_frame.take() {
+        let result = match stack
+            .pending_frame
+            .take()
+            .or_else(|| stack.shown_frame.take())
+        {
             Some(frame) if frame.width == width && frame.height == height => {
                 stack.paint_frame(&shm, qh, &frame)
             }
@@ -588,7 +597,9 @@ impl StackSurface {
             frame.height,
             frame.stride,
             &frame.data,
-        )
+        )?;
+        self.shown_frame = Some(frame.clone());
+        Ok(())
     }
 
     /// Fully transparent buffer, used only if the compositor configures a
