@@ -37,13 +37,34 @@ fn body_markup_or_escaped(body: &str, body_markup: bool) -> String {
     }
 }
 
+/// Fill `{summary}`, `{body}`, `{app_id}` and `{id}` in `template` in one
+/// pass, so placeholders inside the inserted text stay literal. Other
+/// `{…}` text is kept as it is.
 pub fn apply_template(template: &str, notification: &NotificationView) -> String {
-    template
-        .replace("{summary}", &pango_escape(&notification.summary))
-        .replace(
-            "{body}",
-            &body_markup_or_escaped(&notification.body, notification.body_markup),
-        )
-        .replace("{app_id}", &pango_escape(&notification.app_id))
-        .replace("{id}", &notification.id.to_string())
+    let mut out = String::with_capacity(template.len() + notification.body.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let tail = &rest[open..];
+        let close = tail.find('}').map_or(tail.len(), |i| i + 1);
+        match &tail[..close] {
+            "{summary}" => out.push_str(&pango_escape(&notification.summary)),
+            "{body}" => out.push_str(&body_markup_or_escaped(
+                &notification.body,
+                notification.body_markup,
+            )),
+            "{app_id}" => out.push_str(&pango_escape(&notification.app_id)),
+            "{id}" => out.push_str(&notification.id.to_string()),
+            // Not a placeholder: keep the `{` and go on after it, so a
+            // placeholder right behind it (`{{id}`) is still found.
+            _ => {
+                out.push('{');
+                rest = &tail[1..];
+                continue;
+            }
+        }
+        rest = &tail[close..];
+    }
+    out.push_str(rest);
+    out
 }

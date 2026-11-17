@@ -526,3 +526,25 @@ fn dump_preview_png() {
     let out = std::env::var("POSHANKA_PREVIEW").unwrap_or_else(|_| "preview.png".into());
     std::fs::write(out, pixmap.into_png().unwrap()).unwrap();
 }
+
+/// Placeholders are filled in one pass: text that a notification brings in
+/// is never searched for placeholders itself.
+#[test]
+fn template_placeholders_in_notification_text_stay_literal() {
+    use super::template::apply_template;
+
+    let mut notification = test_notification();
+    notification.id = 42;
+    notification.app_id = "chat".into();
+    notification.summary = "type {body} or {id}".into();
+    notification.body = "the {app_id} body".into();
+    notification.body_markup = false;
+    assert_eq!(
+        apply_template(
+            "{summary} | {body} | {app_id} #{id} {unknown}",
+            &notification
+        ),
+        "type {body} or {id} | the {app_id} body | chat #42 {unknown}"
+    );
+    assert_eq!(apply_template("{{id}} {", &notification), "{42} {");
+}
