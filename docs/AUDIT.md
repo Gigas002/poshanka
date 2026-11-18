@@ -80,7 +80,7 @@ Static checks: `cargo clippy` at the three gate levels, `cargo deny check`,
 | Area | Finding | Status |
 | ---- | ------- | ------ |
 | Untested Wayland loop | The Wayland loop, feed thread, subscriber and binary had no tests (0 %). `poshanka/tests/live.rs` runs the binary in a headless sway: drawing (pixels via `grim`), clicks via a virtual pointer, buffer lifetimes via `WAYLAND_DEBUG`, reload, overrides and placement (the restart-timing, shutdown and bottom-left tests were removed as flaky on CI). CI installs sway and grim (`POSHANKA_LIVE_TESTS=1`). | Fixed (34e80f5, 3adf89b) |
-| Coverage | 56.7 % → 81.3 % of lines (`cargo llvm-cov --workspace --all-features`, with sway and grim installed). | Fixed |
+| Coverage | 56.7 % → 81.1 % of lines (`cargo llvm-cov --workspace --all-features`, with sway and grim installed). | Fixed |
 | Cargo warnings | Three manifest warnings on every build. | Fixed (4bba10c) |
 | Dependencies | parley 0.13, vello_cpu 0.4 and resvg 0.50 (the rest were current); cards render pixel-identical. | Fixed (0c04f6b) |
 | Gates | fmt, typos, deny, clippy and tests at the three feature levels, and docs, pass on every commit. | OK |
