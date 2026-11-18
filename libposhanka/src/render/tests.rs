@@ -526,3 +526,49 @@ fn dump_preview_png() {
     let out = std::env::var("POSHANKA_PREVIEW").unwrap_or_else(|_| "preview.png".into());
     std::fs::write(out, pixmap.into_png().unwrap()).unwrap();
 }
+
+/// Placeholders are filled in one pass: text that a notification brings in
+/// is never searched for placeholders itself.
+#[test]
+fn template_placeholders_in_notification_text_stay_literal() {
+    use super::template::apply_template;
+
+    let mut notification = test_notification();
+    notification.id = 42;
+    notification.app_id = "chat".into();
+    notification.summary = "type {body} or {id}".into();
+    notification.body = "the {app_id} body".into();
+    notification.body_markup = false;
+    assert_eq!(
+        apply_template(
+            "{summary} | {body} | {app_id} #{id} {unknown}",
+            &notification
+        ),
+        "type {body} or {id} | the {app_id} body | chat #42 {unknown}"
+    );
+    assert_eq!(apply_template("{{id}} {", &notification), "{42} {");
+}
+
+/// The Desktop Notifications spec's body markup also has `<a href>` and
+/// `<img src alt>`; a body using them must not fall back to showing its tags.
+#[test]
+fn markup_accepts_links_and_images_from_the_notification_spec() {
+    use super::markup::parse;
+
+    let rich = parse(
+        r#"See <a href="https://example.com/?a=1&amp;b=2">the page</a>: <img src="x.png" alt="a cat"/>"#,
+        10.0,
+    )
+    .expect("valid markup");
+    assert_eq!(rich.text, "See the page: a cat");
+
+    // HTML-style `<img>` without the slash, and without alt text.
+    let rich = parse(r#"<b>pic</b> <img src="file:///tmp/x.png"> done"#, 10.0).expect("valid");
+    assert_eq!(rich.text, "pic  done");
+
+    let mut notification = test_notification();
+    notification.body = r#"<a href="https://example.com">link</a>"#.into();
+    notification.body_markup = true;
+    let markup = super::template::apply_template("{body}", &notification);
+    assert_eq!(markup, notification.body, "kept as markup, not escaped");
+}

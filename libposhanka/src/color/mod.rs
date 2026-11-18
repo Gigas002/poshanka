@@ -1,22 +1,23 @@
-//! Hex RGBA strings: `#RRGGBBAA` (eight hex digits, alpha last).
+//! Hex colors: `#RRGGBBAA` (alpha last), or `#RRGGBB` for opaque.
 
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ParseHexRgbaError {
-    #[error("expected `#RRGGBBAA` (leading `#` and exactly 8 hex digits)")]
+    #[error("expected `#RRGGBB` or `#RRGGBBAA` (a `#` and 6 or 8 hex digits)")]
     InvalidFormat,
     #[error("non-hex digit in color string")]
     InvalidDigit,
 }
 
-/// Parse `#RRGGBBAA` into `[r, g, b, a]` with each channel `0..=255`.
+/// Parse `#RRGGBBAA`, or `#RRGGBB` (opaque), into `[r, g, b, a]` with each
+/// channel `0..=255`.
 pub fn parse_hex_rgba(s: &str) -> Result<[u8; 4], ParseHexRgbaError> {
     let s = s.trim();
     let hex = s
         .strip_prefix('#')
         .ok_or(ParseHexRgbaError::InvalidFormat)?;
-    if hex.len() != 8 {
+    if hex.len() != 6 && hex.len() != 8 {
         return Err(ParseHexRgbaError::InvalidFormat);
     }
     if !hex.as_bytes().iter().all(|b| b.is_ascii_hexdigit()) {
@@ -25,7 +26,10 @@ pub fn parse_hex_rgba(s: &str) -> Result<[u8; 4], ParseHexRgbaError> {
     let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| ParseHexRgbaError::InvalidDigit)?;
     let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| ParseHexRgbaError::InvalidDigit)?;
     let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| ParseHexRgbaError::InvalidDigit)?;
-    let a = u8::from_str_radix(&hex[6..8], 16).map_err(|_| ParseHexRgbaError::InvalidDigit)?;
+    let a = match hex.get(6..8) {
+        Some(a) => u8::from_str_radix(a, 16).map_err(|_| ParseHexRgbaError::InvalidDigit)?,
+        None => 0xff,
+    };
     Ok([r, g, b, a])
 }
 
@@ -36,7 +40,8 @@ pub fn rgba_to_bgra(rgba: [u8; 4]) -> [u8; 4] {
     [b, g, r, a]
 }
 
-/// Parse `#RRGGBBAA` and return **BGRA** byte order (`[b, g, r, a]`).
+/// Parse `#RRGGBBAA` or `#RRGGBB` and return **BGRA** byte order
+/// (`[b, g, r, a]`).
 pub fn parse_hex_rgba_to_bgra(s: &str) -> Result<[u8; 4], ParseHexRgbaError> {
     Ok(rgba_to_bgra(parse_hex_rgba(s)?))
 }

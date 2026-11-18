@@ -18,6 +18,8 @@ width = 300
 # max height
 height = 100
 padding = 5
+# transparent space around this card (px): adds to [stack].gap between cards
+# and to [placement].margin at the screen edges; overrides can set it per card
 margin = 10
 
 [border]

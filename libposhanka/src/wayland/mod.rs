@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc;
 
@@ -68,14 +68,16 @@ pub struct FeedHandle {
     pub rx: mpsc::Receiver<FeedSignal>,
 }
 
-/// Runs the notification card stack until the compositor connection closes
-/// or an unrecoverable protocol error occurs.
+/// Runs the notification card stack until `stop` becomes readable (`Ok`),
+/// the compositor connection closes, or an unrecoverable protocol error
+/// occurs.
 pub fn run_overlay(
     stack_spec: SubscriberSpec,
     initial: Vec<NotificationView>,
     feed: Option<FeedHandle>,
     style_source: Box<dyn StyleSource>,
     provider: ProviderSpec,
+    stop: Option<OwnedFd>,
 ) -> Result<(), PoshankaError> {
     let conn = Connection::connect_to_env()?;
     let display = conn.display();
@@ -133,19 +135,28 @@ pub fn run_overlay(
 
         let wayland_fd = read_guard.connection_fd();
         let mut pollfds = vec![PollFd::from_borrowed_fd(wayland_fd, PollFlags::IN)];
+        if let Some(stop) = stop.as_ref() {
+            pollfds.push(PollFd::from_borrowed_fd(stop.as_fd(), PollFlags::IN));
+        }
         if let Some(feed) = state.feed.as_mut() {
             pollfds.push(PollFd::from_borrowed_fd(feed.wakeup.as_fd(), PollFlags::IN));
         }
 
         loop {
             match poll(&mut pollfds, None) {
-                Ok(0) => continue,
+                // A signal arrived (its handler may have made `stop` readable).
+                Ok(0) | Err(rustix::io::Errno::INTR) => continue,
                 Ok(_) => break,
                 Err(e) => {
                     return Err(PoshankaError::WaylandProtocol(format!("poll failed: {e}")));
                 }
             }
         }
+        if stop.is_some() && !pollfds[1].revents().is_empty() {
+            info!("stopping");
+            break;
+        }
+        drop(pollfds);
 
         // `poll` may have woken us for the feed's wakeup fd alone, with nothing
         // to read on the Wayland socket; `read` reports that as `WouldBlock`,
@@ -171,6 +182,11 @@ pub fn run_overlay(
         }
     }
 
+    for (_, stack) in state.stack_surfaces.drain() {
+        stack.destroy();
+    }
+    // Best effort: the connection may be what ended the loop.
+    let _ = event_queue.flush();
     Ok(())
 }
 
@@ -235,13 +251,23 @@ struct StackSurface {
     layer_surface: ZwlrLayerSurfaceV1,
     /// Last size requested via `set_size` (awaiting or matching a configure).
     requested_size: (u32, u32),
+    /// Sizes requested via `set_size` that no configure has answered yet,
+    /// oldest first. A configure answering one of the older ones is stale:
+    /// the answer to `requested_size` is still on its way.
+    unanswered: Vec<(u32, u32)>,
     /// Whether at least one configure has been acked for `requested_size`.
     configured: bool,
     /// Frame content to paint once the next configure is acked.
     pending_frame: Option<Frame>,
+    /// The frame last painted, repainted when the compositor configures the
+    /// surface again without new content (sway sends a second configure
+    /// right after a surface is first mapped).
+    shown_frame: Option<Frame>,
     margin: (i32, i32, i32, i32),
+    /// Backing file of the attached buffer, kept until the next paint.
     pool_file: Option<File>,
-    pool: Option<wl_shm_pool::WlShmPool>,
+    /// The attached buffer; destroyed when the compositor releases it (see
+    /// the `wl_buffer` dispatch) or with the surface.
     buffer: Option<wl_buffer::WlBuffer>,
 }
 
@@ -336,11 +362,15 @@ impl AppState {
             }
         }
 
-        let mut rendered: Vec<(u32, Frame)> = Vec::with_capacity(items.len());
+        let mut rendered: Vec<StackedFrame> = Vec::with_capacity(items.len());
         for view in &items {
             let style = self.style_source.style_for(view);
             match render_frame(&style, view) {
-                Ok(frame) => rendered.push((view.id, frame)),
+                Ok(frame) => rendered.push(StackedFrame {
+                    id: view.id,
+                    frame,
+                    margin: style.margin,
+                }),
                 Err(err) => {
                     warn!(id = view.id, %err, "failed to render notification card; skipping");
                 }
@@ -362,11 +392,7 @@ impl AppState {
             rendered.reverse();
         }
 
-        let stacked: Vec<StackedFrame> = rendered
-            .into_iter()
-            .map(|(id, frame)| StackedFrame { id, frame })
-            .collect();
-        let (composed, rows) = compose_stack(&stacked, self.gap, self.corner.is_right());
+        let (composed, rows) = compose_stack(&rendered, self.gap, self.corner.is_right());
         self.card_rows = rows;
 
         let margin = self.corner.margins(self.base_margin, 0);
@@ -417,6 +443,7 @@ impl AppState {
 
             if size_changed {
                 stack.requested_size = (frame.width, frame.height);
+                stack.unanswered.push(stack.requested_size);
                 stack.configured = false;
                 stack.layer_surface.set_size(frame.width, frame.height);
                 stack.pending_frame = Some(frame);
@@ -457,11 +484,12 @@ impl AppState {
                 surface,
                 layer_surface,
                 requested_size: (frame.width, frame.height),
+                unanswered: vec![(frame.width, frame.height)],
                 configured: false,
                 pending_frame: Some(frame),
+                shown_frame: None,
                 margin,
                 pool_file: None,
-                pool: None,
                 buffer: None,
             },
         );
@@ -487,9 +515,28 @@ impl AppState {
 
         let width = width.max(1);
         let height = height.max(1);
+
+        // A configure answers the latest `set_size` it saw, and the ones
+        // before it. While a newer size is still unanswered, keep the newest
+        // frame for that answer instead of painting it at the wrong size.
+        if let Some(pos) = stack.unanswered.iter().position(|&s| s == (width, height)) {
+            stack.unanswered.drain(..=pos);
+            if !stack.unanswered.is_empty() {
+                debug!(
+                    output_key,
+                    width, height, "configure for an older size; waiting"
+                );
+                return;
+            }
+        }
+        stack.unanswered.clear();
         stack.configured = true;
 
-        let result = match stack.pending_frame.take() {
+        let result = match stack
+            .pending_frame
+            .take()
+            .or_else(|| stack.shown_frame.take())
+        {
             Some(frame) if frame.width == width && frame.height == height => {
                 stack.paint_frame(&shm, qh, &frame)
             }
@@ -514,7 +561,9 @@ impl AppState {
 
     fn on_closed(&mut self, output_key: u32) {
         debug!(output_key, "layer surface closed by compositor");
-        self.stack_surfaces.remove(&output_key);
+        if let Some(stack) = self.stack_surfaces.remove(&output_key) {
+            stack.destroy();
+        }
         self.pointer_pos = None;
     }
 
@@ -568,7 +617,8 @@ impl AppState {
 enum ProviderAction {
     /// Layer B whole-card shortcut: dismiss a notification without actions.
     Close(u32),
-    /// Layer B whole-card shortcut: run the default action.
+    /// Layer B whole-card shortcut: `activate` without a key. notred runs the
+    /// `default` action, or dismisses a notification that offers none.
     Activate(u32),
     /// Layer A gesture report: `button_left` | `button_middle` | `button_right` | `touch`.
     Input(u32, &'static str),
@@ -588,7 +638,9 @@ impl StackSurface {
             frame.height,
             frame.stride,
             &frame.data,
-        )
+        )?;
+        self.shown_frame = Some(frame.clone());
+        Ok(())
     }
 
     /// Fully transparent buffer, used only if the compositor configures a
@@ -617,8 +669,8 @@ impl StackSurface {
     ) -> Result<(), PoshankaError> {
         let size = (stride as u64).saturating_mul(u64::from(height));
 
+        // The previous buffer is destroyed when the compositor releases it.
         self.buffer.take();
-        self.pool.take();
         self.pool_file.take();
 
         let mut file = tempfile::tempfile_in("/dev/shm").map_err(|source| PoshankaError::Io {
@@ -644,14 +696,16 @@ impl StackSurface {
             qh,
             (),
         );
+        // The buffer keeps the pool's memory; the pool itself is not needed.
+        pool.destroy();
 
         self.surface.attach(Some(&buffer), 0, 0);
         self.surface
             .damage_buffer(0, 0, width as i32, height as i32);
         self.surface.commit();
+        debug!(width, height, "stack painted");
 
         self.pool_file = Some(file);
-        self.pool = Some(pool);
         self.buffer = Some(buffer);
         Ok(())
     }
@@ -659,6 +713,11 @@ impl StackSurface {
     fn destroy(self) {
         self.layer_surface.destroy();
         self.surface.destroy();
+        // Destroying a buffer the compositor already released (and so
+        // destroyed) again sends nothing.
+        if let Some(buffer) = self.buffer {
+            buffer.destroy();
+        }
     }
 }
 
@@ -783,9 +842,11 @@ impl Dispatch<wl_seat::WlSeat, ()> for AppState {
 
         if capabilities.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
             state.pointer = Some(seat.get_pointer(qh, ()));
+            debug!("pointer bound");
         }
         if capabilities.contains(wl_seat::Capability::Touch) && state.touch.is_none() {
             state.touch = Some(seat.get_touch(qh, ()));
+            debug!("touch bound");
         }
     }
 }
@@ -893,7 +954,24 @@ impl Dispatch<wl_surface::WlSurface, u32> for AppState {
 wayland_client::delegate_noop!(AppState: ignore wl_compositor::WlCompositor);
 wayland_client::delegate_noop!(AppState: ignore wl_shm::WlShm);
 wayland_client::delegate_noop!(AppState: ignore wl_shm_pool::WlShmPool);
-wayland_client::delegate_noop!(AppState: ignore wl_buffer::WlBuffer);
+
+/// A released buffer is never painted into again (each paint makes a new
+/// one), so it is destroyed; otherwise the compositor would keep its memory
+/// for as long as poshanka runs.
+impl Dispatch<wl_buffer::WlBuffer, ()> for AppState {
+    fn event(
+        _: &mut Self,
+        buffer: &wl_buffer::WlBuffer,
+        event: wl_buffer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_buffer::Event::Release = event {
+            buffer.destroy();
+        }
+    }
+}
 wayland_client::delegate_noop!(AppState: ignore ZwlrLayerShellV1);
 
 #[cfg(test)]

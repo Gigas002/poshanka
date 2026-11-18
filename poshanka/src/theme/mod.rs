@@ -129,12 +129,7 @@ pub struct FragmentColors {
 
 impl Theme {
     pub fn load(path: &Path) -> Result<Self, crate::error::Error> {
-        let raw = std::fs::read_to_string(path).map_err(|source| crate::error::Error::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        toml::from_str(&raw)
-            .map_err(|err| crate::error::Error::Theme(format!("{}: {err}", path.display())))
+        crate::config::read_toml(path, crate::error::Error::Theme)
     }
 }
 
@@ -181,12 +176,7 @@ impl Theme {
 
 impl FragmentTheme {
     pub fn load(path: &Path) -> Result<Self, crate::error::Error> {
-        let raw = std::fs::read_to_string(path).map_err(|source| crate::error::Error::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        toml::from_str(&raw)
-            .map_err(|err| crate::error::Error::Theme(format!("{}: {err}", path.display())))
+        crate::config::read_toml(path, crate::error::Error::Theme)
     }
 }
 

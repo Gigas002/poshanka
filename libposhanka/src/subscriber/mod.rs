@@ -14,6 +14,9 @@ pub struct SubscriberRun {
     pub provider: ProviderSpec,
     pub stack: SubscriberSpec,
     pub style_source: Box<dyn StyleSource>,
+    /// Becomes readable when poshanka should stop (a `signalfd` for
+    /// `SIGTERM`/`SIGINT`, say); `run` then returns `Ok`.
+    pub stop: Option<std::os::fd::OwnedFd>,
 }
 
 /// Run the Wayland card stack with an optional provider feed and initial `list` sync.
@@ -56,5 +59,12 @@ pub fn run(run: SubscriberRun) -> Result<(), PoshankaError> {
         None
     };
 
-    run_overlay(run.stack, initial, feed, run.style_source, run.provider)
+    run_overlay(
+        run.stack,
+        initial,
+        feed,
+        run.style_source,
+        run.provider,
+        run.stop,
+    )
 }

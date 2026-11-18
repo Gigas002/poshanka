@@ -10,6 +10,13 @@
 //! `strikethrough_color`. Unknown attributes are ignored; unknown tags,
 //! unbalanced tags and malformed entities are errors, like in Pango.
 //!
+//! Notification bodies may also use the [Desktop Notifications] markup
+//! that Pango lacks: `<a href="…">` shows its text (links can't be clicked
+//! on a card), and `<img src="…" alt="…">`, with or without the closing
+//! slash, shows its `alt` text.
+//!
+//! [Desktop Notifications]: https://specifications.freedesktop.org/notification-spec/latest/markup.html
+//!
 //! [Pango markup]: https://docs.gtk.org/Pango/pango_markup.html
 
 use std::ops::Range;
@@ -190,7 +197,10 @@ impl Parser<'_> {
                 let end = close.find('>').ok_or_else(|| err("unterminated tag"))?;
                 let name = close[..end].trim();
                 self.pos += 2 + end + 1;
-                self.close(name)?;
+                // `img` is never open (see `open_tag`); a stray `</img>` is harmless.
+                if name != "img" {
+                    self.close(name)?;
+                }
             } else if rest.starts_with('<') {
                 self.open_tag()?;
             } else if rest.starts_with('&') {
@@ -254,6 +264,14 @@ impl Parser<'_> {
         };
         self.pos = body_start + i;
 
+        if name == "img" {
+            // A void element: its alt text stands in for the picture.
+            if let Some((_, alt)) = attrs.iter().find(|(key, _)| key == "alt") {
+                self.out.text.push_str(alt);
+            }
+            return Ok(());
+        }
+
         self.push_open(name.clone(), &attrs)?;
         if self_closing {
             self.close(&name)?;
@@ -276,7 +294,7 @@ impl Parser<'_> {
         };
 
         match open.name.as_str() {
-            "markup" => {}
+            "markup" | "a" => {}
             "b" => self.add(&mut open, Attr::Weight(700.0)),
             "i" => self.add(&mut open, Attr::Slant(FontSlant::Italic)),
             "u" => self.add(&mut open, Attr::Underline(true)),

@@ -15,6 +15,7 @@ fn solid_frame(id: u32, width: u32, height: u32, fill: u8) -> StackedFrame {
             stride,
             data,
         },
+        margin: 0,
     }
 }
 
@@ -220,4 +221,58 @@ fn compose_stack_leaves_gap_transparent() {
     assert!(gap_y < rows[1].y_start);
     let off = gap_y as usize * frame.stride as usize;
     assert_eq!(frame.data[off], 0);
+}
+
+// ── [layout].margin ──────────────────────────────────────────────────────────
+
+fn with_margin(mut frame: StackedFrame, margin: u32) -> StackedFrame {
+    frame.margin = margin;
+    frame
+}
+
+#[test]
+fn compose_stack_surrounds_each_card_with_its_margin() {
+    let frames = vec![
+        with_margin(solid_frame(1, 100, 40, 0xAA), 5),
+        with_margin(solid_frame(2, 100, 30, 0xBB), 5),
+    ];
+    let (frame, rows) = compose_stack(&frames, 10, false);
+    // 5 + 40 + 5 | gap 10 | 5 + 30 + 5
+    assert_eq!((frame.width, frame.height), (110, 100));
+    assert_eq!(
+        rows,
+        vec![
+            CardRow {
+                id: 1,
+                x_start: 5,
+                x_end: 105,
+                y_start: 5,
+                y_end: 45
+            },
+            CardRow {
+                id: 2,
+                x_start: 5,
+                x_end: 105,
+                y_start: 65,
+                y_end: 95
+            },
+        ]
+    );
+    // The margin is transparent and not part of the card.
+    assert_eq!(frame.data[0], 0);
+}
+
+#[test]
+fn compose_stack_margins_are_per_card() {
+    // An override gave the second card more room; right-anchored, it sits
+    // further from the screen's side edge than the first.
+    let frames = vec![
+        with_margin(solid_frame(1, 100, 20, 0xAA), 0),
+        with_margin(solid_frame(2, 100, 20, 0xBB), 20),
+    ];
+    let (frame, rows) = compose_stack(&frames, 0, true);
+    assert_eq!(frame.width, 140);
+    assert_eq!((rows[0].x_start, rows[0].x_end), (40, 140));
+    assert_eq!((rows[1].x_start, rows[1].x_end), (20, 120));
+    assert_eq!((rows[1].y_start, rows[1].y_end), (40, 60));
 }

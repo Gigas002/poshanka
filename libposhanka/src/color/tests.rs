@@ -33,3 +33,13 @@ fn parse_to_bgra() {
         [0, 0, 255, 255]
     );
 }
+
+/// `#RRGGBB` (as `examples/theme.toml` documents) is opaque.
+#[test]
+fn parse_six_digits_as_opaque() {
+    assert_eq!(parse_hex_rgba("#c74ded").unwrap(), [0xc7, 0x4d, 0xed, 0xff]);
+    assert_eq!(
+        parse_hex_rgba("#c74de").unwrap_err(),
+        ParseHexRgbaError::InvalidFormat
+    );
+}
