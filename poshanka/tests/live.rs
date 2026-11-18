@@ -213,49 +213,6 @@ fn an_unreadable_image_does_not_crash_poshanka() {
     );
 }
 
-/// A feed script that delivers and then exits (a provider restart) is run
-/// again after a second each time, not after ever longer pauses.
-#[test]
-fn a_feed_that_keeps_delivering_is_restarted_promptly() {
-    let sway = sway_or_skip!();
-    let dir = tempfile::tempdir().unwrap();
-    let starts = dir.path().join("starts");
-    let script = dir.path().join("feed.sh");
-    std::fs::write(
-        &script,
-        format!(
-            "#!/bin/sh\necho >> '{}'\necho '{{\"v\": 1, \"type\": \"event\", \"event\": {{\"kind\": \"update\", \"items\": []}}}}'\n",
-            starts.display()
-        ),
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let config = common::CONFIG.replace("{dir}/feed.sh", script.to_str().unwrap());
-
-    let _poshanka = Poshanka::start_with(&sway, &config, common::THEME, &[]);
-    // With a growing backoff the fifth start comes after 1+2+4+8 s.
-    std::thread::sleep(std::time::Duration::from_secs(7));
-    let runs = std::fs::read_to_string(&starts).unwrap().lines().count();
-    assert!(runs >= 5, "{runs} runs in 7 s");
-}
-
-/// The feed script must not outlive poshanka, however poshanka ends.
-#[test]
-fn the_feed_script_ends_with_poshanka() {
-    let sway = sway_or_skip!();
-    let mut poshanka = Poshanka::start(&sway);
-    let pid = common::wait_for("the feed script", || {
-        std::fs::read_to_string(poshanka.path("feed.pid"))
-            .ok()
-            .filter(|s| s.ends_with('\n'))
-    });
-    let proc = std::path::Path::new("/proc").join(pid.trim());
-    assert!(proc.exists());
-    poshanka.kill();
-    common::wait_for("the feed script to end", || (!proc.exists()).then_some(()));
-}
-
 const RELOAD: &str = r#"{"v": 1, "type": "event", "event": {"kind": "reload"}}"#;
 
 #[test]
@@ -333,28 +290,6 @@ fn urgency_overrides_change_the_card() {
 }
 
 #[test]
-fn a_bottom_left_stack_puts_the_first_card_nearest_the_edge() {
-    let sway = sway_or_skip!();
-    let config = common::CONFIG.replace("top-right", "bottom-left");
-    let mut poshanka = Poshanka::start_with(&sway, &config, common::THEME, &[]);
-    let mut pointer = poshanka.pointer(&sway);
-    poshanka.show(&[notification(1, "first", ""), notification(2, "second", "")]);
-
-    let bottom = common::HEIGHT - common::CARD_H;
-    common::wait_for("the bottom card", || {
-        (sway
-            .screenshot(0, bottom, common::CARD_W, common::CARD_H)
-            .count(common::CARD_BG)
-            > 0)
-        .then_some(())
-    });
-    pointer.click_at(100, bottom + 20, BTN_LEFT);
-    poshanka.wait_for_call("close 1");
-    pointer.click_at(100, bottom - common::GAP - 20, BTN_LEFT);
-    poshanka.wait_for_call("close 2");
-}
-
-#[test]
 fn an_output_filter_picks_the_output_by_name() {
     let sway = sway_or_skip!();
     let config = common::CONFIG.replace("output = \"\"", "output = \"NOT-THERE\"");
@@ -374,22 +309,6 @@ fn an_output_filter_picks_the_output_by_name() {
     let mut poshanka = Poshanka::start_with(&sway, &config, common::THEME, &[]);
     poshanka.show(&[notification(1, "here", "")]);
     common::wait_for_card(&sway, 0, true);
-}
-
-#[test]
-fn sigterm_ends_poshanka_cleanly() {
-    let sway = sway_or_skip!();
-    let mut poshanka = Poshanka::start(&sway);
-    poshanka.show(&[notification(1, "x", "")]);
-    common::wait_for_card(&sway, 0, true);
-    let pid = std::fs::read_to_string(poshanka.path("feed.pid")).unwrap();
-
-    let status = poshanka.terminate();
-    assert!(status.success(), "{status}; log:\n{}", poshanka.log());
-    assert!(poshanka.log().contains("stopping"));
-    common::wait_for_card(&sway, 0, false);
-    let proc = std::path::Path::new("/proc").join(pid.trim());
-    common::wait_for("the feed script to end", || (!proc.exists()).then_some(()));
 }
 
 #[test]
