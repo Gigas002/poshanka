@@ -10,6 +10,9 @@ use super::stack::stack_offsets;
 pub(crate) struct StackedFrame {
     pub id: u32,
     pub frame: Frame,
+    /// The card's own `[layout].margin`: transparent space on every side,
+    /// outside the card (and outside its click area).
+    pub margin: u32,
 }
 
 /// A card's extent within the composed stack buffer, in surface-local
@@ -26,7 +29,13 @@ pub(crate) struct CardRow {
 /// Compose `frames` (already in top-to-bottom paint order) into one
 /// transparent BGRA buffer, stacked with `gap` pixels between cards.
 ///
-/// Cards narrower than the composed width are left-aligned (`right_align =
+/// Each card occupies a slot with its `margin` on every side; `gap` separates
+/// slots, so two neighbours are `margin + gap + margin` apart, and a card's
+/// margin also sets it off from the screen edges (on top of
+/// `[placement].margin`). Margins come from each card's own style, so app and
+/// urgency overrides can give single cards more room.
+///
+/// Slots narrower than the composed width are left-aligned (`right_align =
 /// false`, for left-anchored stacks) or right-aligned (`right_align = true`,
 /// for right-anchored stacks) — matching mako's per-corner alignment.
 ///
@@ -48,13 +57,17 @@ pub(crate) fn compose_stack(
         );
     }
 
+    let slot = |size: u32, margin: u32| size.saturating_add(margin.saturating_mul(2));
     let width = frames
         .iter()
-        .map(|f| f.frame.width)
+        .map(|f| slot(f.frame.width, f.margin))
         .max()
         .unwrap_or(1)
         .max(1);
-    let heights: Vec<u32> = frames.iter().map(|f| f.frame.height).collect();
+    let heights: Vec<u32> = frames
+        .iter()
+        .map(|f| slot(f.frame.height, f.margin))
+        .collect();
     let offsets = stack_offsets(&heights, gap, 0);
     let height = offsets
         .last()
@@ -70,11 +83,13 @@ pub(crate) fn compose_stack(
     for (sf, &y) in frames.iter().zip(&offsets) {
         let card_w = sf.frame.width;
         let card_h = sf.frame.height;
-        let x = if right_align {
-            width.saturating_sub(card_w)
+        let slot_x = if right_align {
+            width.saturating_sub(slot(card_w, sf.margin))
         } else {
             0
         };
+        let x = slot_x + sf.margin;
+        let y = y + sf.margin;
 
         let row_bytes = card_w as usize * 4;
         let src_stride = sf.frame.stride as usize;

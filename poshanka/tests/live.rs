@@ -391,3 +391,39 @@ fn sigterm_ends_poshanka_cleanly() {
     let proc = std::path::Path::new("/proc").join(pid.trim());
     common::wait_for("the feed script to end", || (!proc.exists()).then_some(()));
 }
+
+#[test]
+fn layout_margin_sets_a_card_off_and_is_not_clickable() {
+    const M: u32 = 20;
+    let sway = sway_or_skip!();
+    let theme = common::THEME.replace("margin = 0", &format!("margin = {M}"));
+    let mut poshanka = Poshanka::start_with(&sway, common::CONFIG, &theme, &[]);
+    let mut pointer = poshanka.pointer(&sway);
+    poshanka.show(&[notification(1, "a", ""), notification(2, "b", "")]);
+
+    // The first card's top-right corner (its border; the outermost column is
+    // antialiased) is M px in from the screen's corner, and the margin around
+    // it stays clear.
+    let corner = common::wait_for("the first card M px from the corner", || {
+        let img = sway.screenshot(common::WIDTH - 2 * M, 0, 2 * M, 2 * M);
+        (img.pixel(M - 2, M) == common::BORDER).then_some(img)
+    });
+    assert_eq!(corner.pixel(M, M), common::SCREEN_BG);
+    assert_eq!(corner.pixel(M - 1, M - 1), common::SCREEN_BG);
+
+    // The second card starts after both margins and the gap.
+    let second_y = M + common::CARD_H + M + common::GAP + M;
+    let between = sway.screenshot(common::WIDTH - 2 * M, second_y - 1, 2 * M, 2);
+    assert_eq!(between.pixel(M - 2, 0), common::SCREEN_BG);
+    assert_eq!(between.pixel(M - 2, 1), common::BORDER);
+
+    // A click in the margin hits nothing; one on the card closes it.
+    pointer.click_at(common::WIDTH - M / 2, M + 20, BTN_LEFT);
+    pointer.click_at(common::WIDTH - M - 100, second_y + 20, BTN_LEFT);
+    poshanka.wait_for_call("close 2");
+    assert!(
+        !poshanka.calls().contains("close 1"),
+        "{}",
+        poshanka.calls()
+    );
+}

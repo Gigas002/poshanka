@@ -9,6 +9,7 @@
 - `libposhanka`: `load_icon_surface`/`load_icon_surface_from_raw` are now `load_icon_pixmap`/`load_icon_pixmap_from_raw` and return `vello_cpu::Pixmap`.
 - `libposhanka`: `SubscriberRun` has a new `stop` field and `run_overlay` a new `stop` parameter: a descriptor that ends the loop when it becomes readable.
 - Updated parley to 0.13, vello_cpu to 0.4 and resvg to 0.50; cards render the same.
+- `[layout].margin` in the theme now does something (it was read and ignored): transparent space around each card, outside its click area. It adds to `[stack].gap` between cards and to `[placement].margin` at the screen edges, and since it is part of the card's style, app and urgency overrides can set it per card. Existing themes that set it (the example's `10`) now space their cards further apart; set it to `0` for the old layout.
 
 ### Fixed
 

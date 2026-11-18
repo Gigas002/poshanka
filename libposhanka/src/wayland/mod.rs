@@ -362,11 +362,15 @@ impl AppState {
             }
         }
 
-        let mut rendered: Vec<(u32, Frame)> = Vec::with_capacity(items.len());
+        let mut rendered: Vec<StackedFrame> = Vec::with_capacity(items.len());
         for view in &items {
             let style = self.style_source.style_for(view);
             match render_frame(&style, view) {
-                Ok(frame) => rendered.push((view.id, frame)),
+                Ok(frame) => rendered.push(StackedFrame {
+                    id: view.id,
+                    frame,
+                    margin: style.margin,
+                }),
                 Err(err) => {
                     warn!(id = view.id, %err, "failed to render notification card; skipping");
                 }
@@ -388,11 +392,7 @@ impl AppState {
             rendered.reverse();
         }
 
-        let stacked: Vec<StackedFrame> = rendered
-            .into_iter()
-            .map(|(id, frame)| StackedFrame { id, frame })
-            .collect();
-        let (composed, rows) = compose_stack(&stacked, self.gap, self.corner.is_right());
+        let (composed, rows) = compose_stack(&rendered, self.gap, self.corner.is_right());
         self.card_rows = rows;
 
         let margin = self.corner.margins(self.base_margin, 0);
