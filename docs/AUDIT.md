@@ -40,6 +40,7 @@ Static checks: `cargo clippy` at the three gate levels, `cargo deny check`,
 | Full feed channel | 64 queued updates ended the run (`try_send`) and left the script running unread. The feed now waits for room and kills its script on error. | Fixed, low (faf79f5) |
 | Template placeholders | `{body}`, `{id}` etc. inside a notification's own text were filled in too: "type {body}" showed the body. | Fixed, low (601591e) |
 | `<a>`/`<img>` bodies | notred sends body markup by default, and the spec allows `<a href>` and `<img>`; the parser rejected them, so the body was shown escaped with tags and URLs. | Fixed, medium (64d50ff) |
+| `[layout].margin` | Read into the card style and never used. It is now a transparent margin around each card, outside its click area, adding to `[stack].gap` and `[placement].margin`. As part of the style it can differ per app or urgency, which the two stack-wide settings can't. Themes that set it now space cards further apart. | Fixed, low (0cab9b8) |
 | `#RRGGBB` colors | Documented in `examples/theme.toml` but rejected: poshanka refused to start. | Fixed, medium (245a2a7) |
 | Unknown config keys | Ignored silently in config, theme and fragments. Now logged as warnings, at start-up and on reload. | Fixed, medium (2497bad) |
 | No shutdown | `SIGTERM`/`SIGINT` killed poshanka mid-frame. Now surfaces are destroyed and it exits 0. | Fixed, low (329abc7) |
@@ -86,11 +87,6 @@ Static checks: `cargo clippy` at the three gate levels, `cargo deny check`,
 
 ## 7. Left open
 
-- **`[layout].margin` does nothing.** The theme key is read into
-  `CardStyle::margin` and never used (spacing comes from `[stack].gap` and
-  `[placement].margin`). Either implement it (an outer margin per card, as in
-  mako) or drop it; both change what existing themes do, so it is a decision
-  for the maintainer. Your theme sets it to 5.
 - **Avatar stream size (§3).** Sending each icon once and referring to it by
   id would cut notred's stream from quadratic to linear, but poshanka copes
   with 20 large avatars well, so the protocol change isn't needed now.
